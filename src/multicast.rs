@@ -8,14 +8,6 @@ pub struct MultiCast {
 }
 
 impl MultiCast {
-    // pub fn new(rw: char) -> MultiCast {
-    //     if rw == 'r' {
-    //         receiver()
-    //     } else {
-    //         sender()
-    //     }
-    // }
-
     pub fn receiver() -> MultiCast {
         // Create a UDP socket
         let socket = UdpSocket::bind("0.0.0.0:9000").expect("Failed to bind socket");
@@ -55,7 +47,7 @@ impl MultiCast {
 
     pub fn recv_msg(&mut self, buf: &mut [u8]) -> (usize, SocketAddr) {
         let (size, src_addr) = self.socket.recv_from(buf).expect("Failed to receive multicast packet");
-        println!("Receive multicast message: '{:?}'", buf);
+        println!("Receive multicast message: '{:?}'", &buf[..size]);
         (size, src_addr)
     }
 
