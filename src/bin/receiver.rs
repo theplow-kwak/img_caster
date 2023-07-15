@@ -1,5 +1,6 @@
 use img_caster::disk::DiskHandler;
 use img_caster::multicast::MultiCast;
+use std::time::{Duration, Instant};
 
 use serde::{Serialize, Deserialize};
 use bincode::{serialize, deserialize, Result};
@@ -28,10 +29,17 @@ fn main() {
     // Create a UDP socket
     let mut receiver = MultiCast::receiver();
 
-    let mut buf = [0u8; 2048];
+    let mut buf = [0u8; 1024];
+    let mut count = 0;
+    let mut start = Instant::now();
     loop {
         let (size, src_addr) = receiver.recv_msg(&mut buf);
         let unpacked_message = unpack_message(&buf).unwrap();
-        println!{"unpacked_message {:#?}", unpacked_message}
+        count += 1;
+        if start.elapsed().as_secs() >= 1 {
+            println!{"{count} pps"}
+            start = Instant::now();
+            count = 0;
+        } 
     }
 }
