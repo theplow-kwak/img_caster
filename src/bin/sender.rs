@@ -1,6 +1,7 @@
 use std::net::{UdpSocket, SocketAddrV4, Ipv4Addr};
 use img_caster::disk::DiskHandler;
 use img_caster::multicast::MultiCast;
+use std::time::{Duration, Instant};
 
 use serde::{Serialize, Deserialize};
 use bincode::{serialize, deserialize, Result};
@@ -44,9 +45,17 @@ fn main() {
         field2: String::from("Hello, UDP!"), 
     };
 
+    let mut count = 0;
+    let mut start = Instant::now();
     loop {
         // Pack the message into a byte vector
         let packed_message = pack_message(&message).unwrap();
         sender.send_msg(&packed_message);
+        count += 1;
+        if start.elapsed().as_secs() >= 1 {
+            println!{"{count} pps"}
+            start = Instant::now();
+            count = 0;
+        } 
     }
 }
