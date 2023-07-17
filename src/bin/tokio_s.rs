@@ -9,13 +9,15 @@ async fn send_multicast_message(addr: SocketAddr, message: &[u8]) -> Result<()> 
 
     let tokio_socket = TokioUdpSocket::from_std(socket)?;
 
-    tokio_socket.send_to(message, addr).await?;
+    loop {
+        tokio_socket.send_to(message, addr).await?;
+    }
     Ok(())
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let multicast_addr: SocketAddr = "239.0.0.1:12345".parse().unwrap();
+    let multicast_addr: SocketAddr = "239.0.0.1:9000".parse().unwrap();
     let message = b"Hello, multicast!";
 
     let send_task = send_multicast_message(multicast_addr, message);

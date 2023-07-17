@@ -21,7 +21,7 @@ impl MultiCast {
 
         // Create a UDP socket
         let socket = UdpSocket::bind("0.0.0.0:9000").expect("Failed to bind socket");
-        // socket.set_nonblocking(true).unwrap();
+        socket.set_nonblocking(true).unwrap();
 
         let multicast_addr = Ipv4Addr::new(239, 0, 0, 1);
         let multicast_group = SocketAddrV4::new(multicast_addr, 9000);
