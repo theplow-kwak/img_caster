@@ -39,23 +39,44 @@ fn main() {
     disk.read(&mut buffer).expect("Failed to read from physical drive");
 
     let message = UdpMessage {
-        field1: 42,
+        field1: 2,
         field3: 0x1234,
         field4: 0xabcd,
         field2: String::from("Hello, UDP!"), 
     };
 
-    let mut count = 0;
-    let mut start = Instant::now();
-    loop {
-        // Pack the message into a byte vector
-        let packed_message = pack_message(&message).unwrap();
-        sender.send_msg(&packed_message);
-        count += 1;
-        if start.elapsed().as_secs() >= 1 {
-            println!{"{count} pps"}
-            start = Instant::now();
-            count = 0;
-        } 
-    }
+    let packed_message = pack_message(&message).unwrap();
+    sender.send_msg(&packed_message);
+
+    let message = UdpMessage {
+        field1: 4,
+        field3: 0x1234,
+        field4: 0xabcd,
+        field2: String::from("Hello, UDP!"), 
+    };
+    let packed_message = pack_message(&message).unwrap();
+    sender.send_msg(&packed_message);
+
+    let message = UdpMessage {
+        field1: 1,
+        field3: 0x1234,
+        field4: 0xabcd,
+        field2: String::from("Hello, UDP!"), 
+    };
+    let packed_message = pack_message(&message).unwrap();
+    sender.send_msg(&packed_message);
+
+    // let mut count = 0;
+    // let mut start = Instant::now();
+    // loop {
+    //     // Pack the message into a byte vector
+    //     let packed_message = pack_message(&message).unwrap();
+    //     sender.send_msg(&packed_message);
+    //     count += 1;
+    //     if start.elapsed().as_secs() >= 1 {
+    //         println!{"{count} pps"}
+    //         start = Instant::now();
+    //         count = 0;
+    //     } 
+    // }
 }
