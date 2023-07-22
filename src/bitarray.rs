@@ -1,5 +1,3 @@
-
-
 struct BitArray {
     bits: Vec<bool>,
     size: usize,
@@ -7,8 +5,8 @@ struct BitArray {
 
 impl BitArray {
     fn new(size: usize) -> Self {
-        let byte_len = (size + 7) / 8;  // 비트 개수를 바이트 개수로 변환
-        let bits = vec![false; byte_len * 8];  // 비트 배열 초기화
+        let byte_len = (size + 7) / 8; // 비트 개수를 바이트 개수로 변환
+        let bits = vec![false; byte_len * 8]; // 비트 배열 초기화
 
         Self { bits, size }
     }

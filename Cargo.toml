@@ -12,3 +12,5 @@ socket2 = "0.4"
 tokio = { version = "1", features = ["full"] }
 windows = "0.48"
 windows-drives = "0.5"
+derivative = "2.2.0"
+nom = "7.1.3"

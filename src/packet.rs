@@ -1,80 +1,123 @@
-use serde::{Serialize, Deserialize};
-use bincode::{serialize, deserialize, Result};
+use bincode::{deserialize, serialize, Result};
+use serde::{Deserialize, Serialize};
 
 // Define a struct representing the UDP message
 #[derive(Debug, Serialize, Deserialize)]
-pub struct msg1 {
-    // Add fields as needed
-    opcode: u16,
+pub struct MsgOk {
     field1: u32,
     field2: u32,
     field3: [u8; 32],
-    // ...
+}
+
+impl MsgOk {
+    pub fn new(field1: u32, field2: u32, field3: [u8; 32]) -> Self {
+        Self {
+            field1,
+            field2,
+            field3,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct msg2 {
-    // Add fields as needed
-    opcode: u16,
+pub struct MsgHello {
     field1: u16,
     field2: u16,
     field3: [u8; 4],
-    // ...
+}
+
+impl MsgHello {
+    pub fn new(field1: u16, field2: u16, field3: [u8; 4]) -> Self {
+        Self {
+            field1,
+            field2,
+            field3,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct msg3 {
-    // Add fields as needed
-    opcode: u16,
+pub struct MsgRetransmit {
     field1: u16,
     field2: [u8; 16],
     field3: u32,
     // ...
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct msg4 {
-    // Add fields as needed
-    opcode: u16,
-    field1: u16,
-    field2: u16,
-    field3: [u8; 8],
-    // ...
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct msg5 {
-    // Add fields as needed
-    opcode: u16,
-    field1: u16,
-    field2: u16,
-    field3: [u8; 8],
-    field4: [u8; 8],
-    // ...
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub enum message {
-    ok(msg1),
-    hello(msg2),
-    retransmit(msg3),
-    reqack(msg4),
-    ready(msg5),
-    none,
-}
-
-use core::convert::TryInto;
-
-impl message {
-    pub fn parse(data: &[u8]) -> Self {
-        match u16::from_le_bytes(data[..2].try_into().unwrap()) {
-            0 => Self::ok(deserialize(data).unwrap()),
-            1 => Self::hello(deserialize(data).unwrap()),
-            2 => Self::retransmit(deserialize(data).unwrap()),
-            3 => Self::reqack(deserialize(data).unwrap()),
-            4 => Self::ready(deserialize(data).unwrap()),
-            _ => Self::none,
+impl MsgRetransmit {
+    pub fn new(field1: u16, field2: [u8; 16], field3: u32) -> Self {
+        Self {
+            field1,
+            field2,
+            field3,
         }
     }
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MsgReqack {
+    field1: u16,
+    field2: u16,
+    field3: [u8; 8],
+}
+
+impl MsgReqack {
+    pub fn new(field1: u16, field2: u16, field3: [u8; 8]) -> Self {
+        Self {
+            field1,
+            field2,
+            field3,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MsgReady {
+    field1: u16,
+    field2: u16,
+    field3: [u8; 8],
+    field4: [u8; 8],
+}
+
+impl MsgReady {
+    pub fn new(field1: u16, field2: u16, field3: [u8; 8], field4: [u8; 8]) -> Self {
+        Self {
+            field1,
+            field2,
+            field3,
+            field4,
+        }
+    }
+}
+
+#[repr(u16)]
+#[derive(Debug, Serialize, Deserialize)]
+pub enum Message {
+    Ok(MsgOk),
+    Hello(MsgHello),
+    Retransmit(MsgRetransmit),
+    Reqack(MsgReqack),
+    Ready(MsgReady),
+    None,
+}
+
+use core::convert::TryInto;
+
+impl Message {
+    pub fn decode(data: &[u8]) -> Self {
+        let opcode = u32::from_le_bytes(data[..4].try_into().unwrap());
+        let data = &data[4..];
+        match opcode {
+            0 => Self::Ok(deserialize(data).unwrap()),
+            1 => Self::Hello(deserialize(data).unwrap()),
+            2 => Self::Retransmit(deserialize(data).unwrap()),
+            3 => Self::Reqack(deserialize(data).unwrap()),
+            4 => Self::Ready(deserialize(data).unwrap()),
+            _ => Self::None,
+        }
+    }
+
+    pub fn encode(&self) -> Vec<u8> {
+        serialize(self).unwrap()
+    }
+}

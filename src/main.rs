@@ -1,5 +1,5 @@
-use serde::{Serialize, Deserialize};
-use bincode::{serialize, deserialize, Result};
+use bincode::{deserialize, serialize, Result};
+use serde::{Deserialize, Serialize};
 
 // Define a struct representing the UDP message
 #[derive(Debug, Serialize, Deserialize)]
@@ -26,15 +26,14 @@ fn main() {
         field1: 42,
         field3: 0x1234,
         field4: 0xabcd,
-        field2: String::from("Hello, UDP!"), 
+        field2: String::from("Hello, UDP!"),
     };
 
     // Pack the message into a byte vector
     let packed_message = pack_message(&message).unwrap();
 
-    println!{"UdpMessage {:#?} \npacked_message {:?}", message, packed_message}
+    println! {"UdpMessage {:#?} \npacked_message {:?}", message, packed_message}
 
     let unpacked_message = unpack_message(&packed_message).unwrap();
-    println!{"unpacked_message {:#?}", unpacked_message}
+    println! {"unpacked_message {:#?}", unpacked_message}
 }
-
