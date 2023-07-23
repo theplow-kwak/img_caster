@@ -1,39 +1,32 @@
 use bincode::{deserialize, serialize, Result};
 use serde::{Deserialize, Serialize};
 
-// Define a struct representing the UDP message
-#[derive(Debug, Serialize, Deserialize)]
-struct UdpMessage {
-    // Add fields as needed
-    field1: u32,
-    field3: u16,
-    field4: u16,
-    field2: String,
-    // ...
-}
-
-fn pack_message(message: &UdpMessage) -> Result<Vec<u8>> {
-    serialize(message)
-}
-
-fn unpack_message(data: &[u8]) -> Result<UdpMessage> {
-    deserialize(data)
-}
+use img_caster::bitarray;
 
 fn main() {
-    // Create an instance of the UdpMessage struct
-    let message = UdpMessage {
-        field1: 42,
-        field3: 0x1234,
-        field4: 0xabcd,
-        field2: String::from("Hello, UDP!"),
-    };
+    let mut bitarray = bitarray::BitArray::new(55);
+    println! {"Bitarray {:?}", bitarray}
 
-    // Pack the message into a byte vector
-    let packed_message = pack_message(&message).unwrap();
+    bitarray.set(3, true);
+    println! {"Bitarray {:?}", bitarray}
 
-    println! {"UdpMessage {:#?} \npacked_message {:?}", message, packed_message}
+    bitarray.set(5, true);
+    println! {"Bitarray {:?}", bitarray}
 
-    let unpacked_message = unpack_message(&packed_message).unwrap();
-    println! {"unpacked_message {:#?}", unpacked_message}
+    bitarray.set(20, true);
+    println! {"Bitarray {:?}", bitarray}
+
+    bitarray.set(53, true);
+    println! {"Bitarray {:?}", bitarray}
+
+    let packed = serialize(&bitarray).unwrap();
+    println! {"packed {:?}", packed}
+
+    let mut other = bitarray::BitArray::new(55);
+    other.set(1, true);
+    other.set(25, true);
+    other.set(48, true);
+
+    bitarray.bit_or(other);
+
 }
