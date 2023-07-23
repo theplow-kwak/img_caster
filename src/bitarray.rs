@@ -28,19 +28,22 @@ impl BitArray {
         }
     }
 
-    pub fn get(&mut self, index: usize) -> Option<bool> {
-        if index >= self.size {
-            return None;
-        }
+    pub fn get(&mut self, index: usize) -> bool {
+        assert!(index < self.size, "Index out of range");
 
         let byte_index = index / 8;
         let bit_index = index % 8;
 
-        Some((self.bits[byte_index] & (1 << bit_index)) != 0)
+        (self.bits[byte_index] & (1 << bit_index)) != 0
     }
 
-    pub fn bit_or(&mut self, other: BitArray) -> &mut Self {
+    pub fn bits_or(&mut self, other: BitArray) -> &mut Self {
         self.bits = self.bits.iter().zip(other.bits).map(|(x, y)| x | y).collect();
         self
     }
+
+    pub fn bits(&self) -> &Vec<u8> {
+        &self.bits
+    }
+    
 }

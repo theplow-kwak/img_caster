@@ -27,6 +27,9 @@ fn main() {
     other.set(25, true);
     other.set(48, true);
 
-    bitarray.bit_or(other);
+    bitarray.bits_or(other);
+    let packed = serialize(&bitarray).unwrap();
+    println! {"packed {:?}", packed}
+    println! {"bits {:?}", bitarray.bits()}
 
 }
