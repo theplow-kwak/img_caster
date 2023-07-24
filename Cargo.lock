@@ -94,6 +94,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "endian_codec"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6cec890fb7e3b0517206e7c841822aef050c36d1b73a4ab9efe044142632d73"
+dependencies = [
+ "endian_codec_derive",
+]
+
+[[package]]
+name = "endian_codec_derive"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "178778b80c6a219a9c75e6f309ed7cec7b5413c33269c68614125d8491fc413d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
 name = "gimli"
 version = "0.27.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -111,6 +131,7 @@ version = "0.1.0"
 dependencies = [
  "bincode",
  "derivative",
+ "endian_codec",
  "nom",
  "serde",
  "socket2",
