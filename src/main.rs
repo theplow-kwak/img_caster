@@ -82,6 +82,11 @@ fn main() {
     println!("remain buf {:?}", &right);
     vbuf = right.to_vec();
     println!("b vec buf {:?}", &vbuf);
-    vbuf.splice(5..10, tt);
+    vbuf.splice(5..10, tt);  // update
     println!("splice vec buf {:?}", &vbuf);   
+    let mut remain: Vec<_> = vbuf.drain(..10).collect();    // pop
+    remain[3] = 3;
+    println!("b vec buf {:?}", &vbuf);
+    println!("remain buf {:?}", &remain);
+    
 }
