@@ -66,6 +66,8 @@ fn main() {
         1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 4, 8, 9, 10, 11, 12, 13, 14, 15,
         16, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
     ]; // From PackedSize
+    let tt = [55u8, 34,4,43,53,55];
+
     {
         println!("buf {:?}", &buf);
         if let Ok(data) = test(&mut buf) {
@@ -80,5 +82,6 @@ fn main() {
     println!("remain buf {:?}", &right);
     vbuf = right.to_vec();
     println!("b vec buf {:?}", &vbuf);
-    
+    vbuf.splice(5..10, tt);
+    println!("splice vec buf {:?}", &vbuf);   
 }
