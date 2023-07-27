@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use img_caster::bitarray::BitArray;
 
 #[derive(Debug)]
 struct Slice {
@@ -23,6 +24,7 @@ impl Slice {
 struct Man {
     slices: HashMap<u32, Slice>,
     sliceno: u32,
+    map: BitArray,
 }
 
 impl Man {
@@ -30,6 +32,7 @@ impl Man {
         Self {
             slices: HashMap::new(),
             sliceno: 0,
+            map: BitArray::new(100),
         }
     }
 
@@ -86,7 +89,22 @@ fn main() {
     println!("splice vec buf {:?}", &vbuf);   
     let mut remain: Vec<_> = vbuf.drain(..10).collect();    // pop
     remain[3] = 3;
-    println!("b vec buf {:?}", &vbuf);
     println!("remain buf {:?}", &remain);
+
+    man.map.set(4);
+    man.map.set(14);
+    man.map.set(44);
+    man.map.set(54);
+    println!("bits {:?}", man.map);   
+
+    let mut bits = man.map.bits();
+    vbuf.append(&mut bits);
+    println!("append bits to vec buf {:?}", &vbuf);
+    println!("bits {:?}", man.map);   
     
+    man.map.set(4);
+    man.map.set(53);
+    man.map.set(22);
+    man.map.set(54);
+    println!("bits {:?}", man.map);   
 }

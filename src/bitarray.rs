@@ -15,17 +15,22 @@ impl BitArray {
         Self { bits, size }
     }
 
-    pub fn set(&mut self, index: usize, value: bool) {
+    pub fn clear(&mut self, index: usize) {
         assert!(index < self.size, "Index out of range");
 
         let byte_index = index / 8;
         let bit_index = index % 8;
 
-        if value {
-            self.bits[byte_index] |= 1 << bit_index;
-        } else {
-            self.bits[byte_index] &= !(1 << bit_index);
-        }
+        self.bits[byte_index] &= !(1 << bit_index);
+    }
+
+    pub fn set(&mut self, index: usize) {
+        assert!(index < self.size, "Index out of range");
+
+        let byte_index = index / 8;
+        let bit_index = index % 8;
+
+        self.bits[byte_index] |= 1 << bit_index;
     }
 
     pub fn get(&mut self, index: usize) -> bool {
@@ -42,8 +47,8 @@ impl BitArray {
         self
     }
 
-    pub fn bits(&self) -> &Vec<u8> {
-        &self.bits
+    pub fn bits(&mut self) -> Vec<u8> {
+        self.bits.clone()
     }
     
 }
