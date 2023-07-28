@@ -101,12 +101,15 @@ pub enum Message {
     None,
 }
 
+const OPCODE_LEN:usize = 4;
+
 use core::convert::TryInto;
 
 impl Message {
     pub fn decode(data: &[u8]) -> Self {
-        let opcode = u32::from_le_bytes(data[..4].try_into().unwrap());
-        let data = &data[4..];
+        let mut data = data.to_vec();
+        let (opcode, data) = data.split_at_mut(OPCODE_LEN);
+        let opcode = u32::from_le_bytes(opcode.try_into().unwrap());
         match opcode {
             0 => Self::Ok(deserialize(data).unwrap()),
             1 => Self::Hello(deserialize(data).unwrap()),

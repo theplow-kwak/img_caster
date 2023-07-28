@@ -1,6 +1,7 @@
-use socket2::{Domain, Socket, Type};
+use socket2::{Domain, SockAddr, Socket, Type};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
+use std::os::windows::prelude::AsSocket;
 
 pub struct MultiCast {
     socket: UdpSocket,
@@ -10,21 +11,20 @@ pub struct MultiCast {
 
 impl MultiCast {
     pub fn receiver() -> MultiCast {
-        // let socket = Socket::new(Domain::IPV4, Type::DGRAM, None).unwrap();
-        // socket.set_recv_buffer_size(1024 * 1024).unwrap(); // Set the receive buffer size to 1MB
-        // let address: SocketAddr = "[::1]:0".parse().unwrap();
-        // println!("{:?}", address);
-        // let address = address.into();
-        // println!("{:?}", address);
-        // socket.bind(&address);
-        // let udp_socket = UdpSocket::from(socket);
+        // Create a socket
+        let socket = Socket::new(Domain::IPV4, Type::DGRAM, None).unwrap();
+        // socket.set_nonblocking(true).unwrap();
 
-        // Create a UDP socket
-        let socket = UdpSocket::bind("0.0.0.0:9000").expect("Failed to bind socket");
-        socket.set_nonblocking(true).unwrap();
+        let rcvbuf_size = 4096;
+        socket.set_recv_buffer_size(rcvbuf_size);
 
+        let addr: SocketAddr = "0.0.0.0:9000".parse().unwrap();
+        socket.bind(&addr.into());
+    
+        let socket: UdpSocket = socket.into();
         let multicast_addr = Ipv4Addr::new(239, 0, 0, 1);
         let multicast_group = SocketAddrV4::new(multicast_addr, 9000);
+        let mut sockaddr_multicast = SockAddr::from(multicast_group);
 
         // Join the multicast group
         socket
@@ -40,13 +40,15 @@ impl MultiCast {
 
     pub fn sender() -> MultiCast {
         // Create a UDP socket
-        let socket = UdpSocket::bind("0.0.0.0:0").expect("Failed to bind socket");
+        // let socket = UdpSocket::bind("0.0.0.0:0").expect("Failed to bind socket");
+        let socket = Socket::new(Domain::IPV4, Type::DGRAM, None).unwrap();
+        let socket: UdpSocket = socket.into();
 
         // Set the TTL (time to live) for multicast packets
         socket.set_multicast_ttl_v4(2).expect("Failed to set TTL");
-
         let multicast_addr = Ipv4Addr::new(239, 0, 0, 1);
         let multicast_group = SocketAddrV4::new(multicast_addr, 9000);
+        let mut sockaddr_multicast = SockAddr::from(multicast_group);
 
         // Join the multicast group
         socket
@@ -61,9 +63,9 @@ impl MultiCast {
     }
 
     pub fn send_msg(&mut self, message: &[u8]) {
-        println!("Sent to {}: '{:?}'\n", self.multicast_group, message);
+        println!("Sent to {:?}: '{:?}'\n", self.multicast_group, message);
         self.socket
-            .send_to(message, self.multicast_group)
+            .send_to(message, &self.multicast_group)
             .expect("Failed to send multicast packet");
     }
 
@@ -85,9 +87,6 @@ impl MultiCast {
         }
     }
 
-    pub fn recv_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        self.socket.recv_from(buf)
-    }
 }
 
 // socket.set_nonblocking(true).expect("Failed to set non-blocking mode");
