@@ -13,7 +13,7 @@ impl MultiCast {
     pub fn receiver() -> MultiCast {
         // Create a socket
         let socket = Socket::new(Domain::IPV4, Type::DGRAM, None).unwrap();
-        // socket.set_nonblocking(true).unwrap();
+        socket.set_nonblocking(true).unwrap();
 
         let rcvbuf_size = 4096;
         socket.set_recv_buffer_size(rcvbuf_size);
@@ -63,28 +63,29 @@ impl MultiCast {
     }
 
     pub fn send_msg(&mut self, message: &[u8]) {
-        println!("Sent to {:?}: '{:?}'\n", self.multicast_group, message);
+        // println!("Sent to {:?}: '{:?}'\n", self.multicast_group, message);
         self.socket
             .send_to(message, &self.multicast_group)
             .expect("Failed to send multicast packet");
     }
 
-    pub fn recv_msg(&mut self, buf: &mut [u8]) -> (usize, SocketAddr) {
+    pub fn recv_msg(&mut self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+        self.socket.recv_from(buf)
         // let (size, src_addr) = self.socket.recv_from(buf).expect("Failed to receive multicast packet");
         // println!("Receive multicast message: '{:?}'", &buf[..size]);
-        loop {
-            match self.socket.recv_from(buf) {
-                Ok((size, address)) => return (size, address),
-                Err(ref err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                    // Handle timeout or perform other tasks
-                    // ...
-                }
-                Err(err) => {
-                    // Handle other errors
-                    // ...
-                }
-            }
-        }
+        // loop {
+        //     match self.socket.recv_from(buf) {
+        //         Ok((size, address)) => return (size, address),
+        //         Err(ref err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+        //             // Handle timeout or perform other tasks
+        //             // ...
+        //         }
+        //         Err(err) => {
+        //             // Handle other errors
+        //             // ...
+        //         }
+        //     }
+        // }
     }
 
 }

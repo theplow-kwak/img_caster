@@ -12,16 +12,6 @@ fn main() {
     // Create a UDP socket
     let mut sender = MultiCast::sender();
 
-    let filename = "\\\\.\\PhysicalDrive0";
-    let rwflag = 'r';
-    // Open the physical drive with appropriate options
-    let mut disk = DiskHandler::new(filename.to_string(), rwflag);
-    let mut buffer = [0u8; 2048];
-
-    disk.open();
-    disk.read(&mut buffer)
-        .expect("Failed to read from physical drive");
-
     let MsgOk = packet::MsgOk::new(2, 0x1234, [0; 32]);
     let message = packet::Message::Ok(MsgOk).encode();
     sender.send_msg(&message);
@@ -38,17 +28,18 @@ fn main() {
     let message = packet::Message::Retransmit(MsgRetransmit).encode();
     sender.send_msg(&message);
 
-    // let mut count = 0;
-    // let mut start = Instant::now();
-    // loop {
-    //     // Pack the message into a byte vector
-    //     let packed_message = pack_message(&message).unwrap();
-    //     sender.send_msg(&packed_message);
-    //     count += 1;
-    //     if start.elapsed().as_secs() >= 1 {
-    //         println!{"{count} pps"}
-    //         start = Instant::now();
-    //         count = 0;
-    //     }
-    // }
+    let mut count = 0;
+    let mut start = Instant::now();
+    loop {
+        // Pack the message into a byte vector
+        let MsgOk = packet::MsgOk::new(2, 0x1234, [0; 32]);
+        let message = packet::Message::Ok(MsgOk).encode();
+        sender.send_msg(&message);
+        count += 1;
+        if start.elapsed().as_secs() >= 1 {
+            println!{"{count} pps"}
+            start = Instant::now();
+            count = 0;
+        }
+    }
 }
