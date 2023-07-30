@@ -17,8 +17,9 @@ fn main() {
     let mut buf = [0u8; 1024];
     let mut count = 0;
     let mut start = Instant::now();
+    let mut elapstime = Instant::now();
     let mut unpacked_message: Option<Message> = None;
-
+    let mut receive_bytes: usize = 0;
     let device_state = DeviceState::new();
 
     loop {
@@ -28,15 +29,17 @@ fn main() {
                 // println!("message {:?}", unpacked_message);
                 // println!("serialize {:?}\n", serialize(&unpacked_message).unwrap());
                 count += 1;
+                receive_bytes += size;
             }
             Err(ref err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                if start.elapsed().as_secs() >= 1 {
-                    print!{"\r{count} pps"}
+                if elapstime.elapsed().as_secs() >= 1 {
+                    let (size, unit) = img_caster::format_size(receive_bytes as u64);
+                    print!{"\rBytes = {size} {unit}, {count} pps"}
                     // if let Some(ref msg) = unpacked_message {
                     //     println!("message {:?}", msg);
                     // }
                     io::stdout().flush().unwrap();
-                    start = Instant::now();
+                    elapstime = Instant::now();
                     count = 0;
                     if img_caster::kbdcheck('q') {
                         break;

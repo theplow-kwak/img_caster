@@ -22,3 +22,22 @@ pub fn kbdcheck(ch: char) -> bool {
     }
     return false;
 }
+
+pub fn format_size(size_in_bytes: u64) -> (f64, &'static str) {
+    const GB: u64 = 1_000_000_000;
+    const MB: u64 = 1_000_000;
+    const KB: u64 = 1_000;
+
+    if size_in_bytes >= GB {
+        let size_gb = size_in_bytes as f64 / GB as f64;
+        return (size_gb, "GB");
+    } else if size_in_bytes >= MB {
+        let size_mb = size_in_bytes as f64 / MB as f64;
+        return (size_mb, "MB");
+    } else if size_in_bytes >= KB {
+        let size_kb = size_in_bytes as f64 / KB as f64;
+        return (size_kb, "KB");
+    } else {
+        return (size_in_bytes as f64, "Bytes");
+    }
+}
