@@ -1,19 +1,19 @@
-use std::io::{self, Read};
-use crossterm::event::{self, KeyCode, KeyEvent, KeyModifiers};
+use std::io;
+use std::io::Write; // <--- bring flush() into scope
+use std::thread;
+use std::time::Duration;
 
 fn main() {
-    loop {
-        if event::poll(std::time::Duration::from_millis(100)).unwrap() {
-            if let event::Event::Key(KeyEvent { code, modifiers, ..}) = event::read().unwrap() {
-                if let KeyCode::Char(c) = code {
-                    println!("Character pressed: {}", c);
-                    if c == 'q' {
-                        break; // Exit the loop if 'q' is pressed
-                    }
-                }
-                // You can also check for other key events here
-                // e.g., KeyCode::Up, KeyCode::Down, KeyCode::Enter, etc.
-            }
-        }
+    for i in 1..=10 {
+        print!("Progress: {}%", i);
+        // Flush the output to make sure it's visible immediately
+        let _ = std::io::stdout().flush();
+
+        // Simulate some work being done
+        thread::sleep(Duration::from_secs(1));
+
+        // Clear the line (overwrite it with spaces) to prepare for the next iteration
+        print!("\r{}", " ".repeat(12));
     }
+    println!("\nTask completed!");
 }
