@@ -4,16 +4,10 @@ use std::thread;
 use std::time::Duration;
 
 fn main() {
-    for i in 1..=10 {
-        print!("Progress: {}%", i);
-        // Flush the output to make sure it's visible immediately
-        let _ = std::io::stdout().flush();
+    let mut data = vec![0u8; 98];
 
-        // Simulate some work being done
-        thread::sleep(Duration::from_secs(1));
-
-        // Clear the line (overwrite it with spaces) to prepare for the next iteration
-        print!("\r{}", " ".repeat(12));
+    let mut iter = data.chunks(10);
+    while let Some(mut chunk) = iter.next() {
+        println!("len = {}, {:?}", chunk.len(), chunk);
     }
-    println!("\nTask completed!");
 }
