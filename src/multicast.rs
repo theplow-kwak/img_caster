@@ -1,12 +1,70 @@
+use log::{debug, error, info, trace, warn};
 use socket2::{Domain, SockAddr, Socket, Type};
+use std::env;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
-use std::os::windows::prelude::AsSocket;
+use std::process::Command;
+use encoding::{Encoding, EncoderTrap, DecoderTrap};
+use encoding::all::WINDOWS_949; // Windows-949는 한글 인코딩입니다.
 
 pub struct MultiCast {
     socket: UdpSocket,
     multicast_addr: Ipv4Addr,
     multicast_group: SocketAddrV4,
+}
+
+#[derive(Debug)]
+pub struct NetworkInterface {
+    ip_address: Option<String>,
+    subnet_mask: Option<String>,
+}
+
+fn convert_to_english(input: &str) -> String {
+    let encoded_bytes = WINDOWS_949.encode(input, EncoderTrap::Replace).unwrap();
+    String::from_utf8_lossy(&encoded_bytes).to_string()
+}
+
+pub fn parse_ipconfig_output() -> Vec<NetworkInterface> {
+    let output = Command::new("ipconfig")
+        .env("LANG", "en-US") // Set LANG environment variable to "en-US"
+        .output()
+        .expect("Failed to execute ipconfig.");
+
+    let output = String::from_utf8_lossy(&output.stdout);
+    // info!("{}", output);
+    // let english_output = convert_to_english(&output);
+    // info!("{}", english_output);
+
+    let mut interfaces: Vec<NetworkInterface> = Vec::new();
+    let mut current_interface: Option<NetworkInterface> = None;
+
+    for line in output.lines() {
+        info!("{}", line);
+        if line.starts_with("Ethernet adapter") {
+            current_interface = Some(NetworkInterface {
+                ip_address: None,
+                subnet_mask: None,
+            });
+        } else if let Some(ref mut interface) = current_interface {
+            if line.trim().starts_with("IPv4 Address") {
+                let parts: Vec<&str> = line.trim().split(':').collect();
+                if let Some(ip_str) = parts.get(1) {
+                    interface.ip_address = Some(ip_str.trim().to_string());
+                }
+            } else if line.trim().starts_with("Subnet Mask") {
+                let parts: Vec<&str> = line.trim().split(':').collect();
+                if let Some(subnet_mask_str) = parts.get(1) {
+                    interface.subnet_mask = Some(subnet_mask_str.trim().to_string());
+                }
+            } else if line.trim().is_empty() {
+                if let Some(interface) = current_interface.take() {
+                    interfaces.push(interface);
+                }
+            }
+        }
+    }
+
+    interfaces
 }
 
 impl MultiCast {
@@ -20,7 +78,7 @@ impl MultiCast {
 
         let addr: SocketAddr = "0.0.0.0:9000".parse().unwrap();
         socket.bind(&addr.into());
-    
+
         let socket: UdpSocket = socket.into();
         let multicast_addr = Ipv4Addr::new(239, 0, 0, 1);
         let multicast_group = SocketAddrV4::new(multicast_addr, 9000);
@@ -87,7 +145,6 @@ impl MultiCast {
         //     }
         // }
     }
-
 }
 
 // socket.set_nonblocking(true).expect("Failed to set non-blocking mode");

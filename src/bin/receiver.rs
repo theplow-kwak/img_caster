@@ -20,7 +20,6 @@ fn main() {
     let mut elapstime = Instant::now();
     let mut unpacked_message: Option<Message> = None;
     let mut receive_bytes: usize = 0;
-    let device_state = DeviceState::new();
 
     loop {
         match receiver.recv_msg(&mut buf) {
