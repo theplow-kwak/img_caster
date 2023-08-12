@@ -3,6 +3,7 @@ use simplelog::*;
 use std::fs::File;
 
 use img_caster::multicast;
+use img_caster::bitarray::BitArray;
 
 fn main() {
     CombinedLogger::init(
@@ -76,5 +77,38 @@ fn main() {
             println!("{}", e);
         }
     }
+
+    if let Some(hostname) = system_info::HostName::get() {
+        println!("host name: {}", hostname);
+    }
+
+    let mut buf = [
+        1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 4, 8, 9, 10, 11, 12, 13, 14, 15,
+        16, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+    ]; // From PackedSize
+
+    let mut vbuf = buf.to_vec();
+    let mut map = BitArray::new(100);
+
+    map.set(4);
+    map.set(14);
+    map.set(44);
+    map.set(54);
+    println!("map {:?}", map);   
+
+    let mut bits = map.bits();
+    vbuf.append(&mut bits);
+    println!("append bits to vec buf {:?}", &vbuf);
+    println!("map {:?}", map);   
+    
+    let mut map2 = BitArray::new(100);
+    map2.set(74);
+    map2.set(53);
+    map2.set(22);
+    map2.set(54);
+    println!("map2 {:?}", map2);   
+
+    map |= map2;
+    println!("map |= map2 {:?}", map);   
 
 }

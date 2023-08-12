@@ -1,5 +1,6 @@
 use bincode::{deserialize, serialize, Result};
 use serde::{Deserialize, Serialize};
+use std::ops::{BitAndAssign, BitOrAssign};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BitArray {
@@ -43,12 +44,40 @@ impl BitArray {
     }
 
     pub fn bits_or(&mut self, other: BitArray) -> &mut Self {
-        self.bits = self.bits.iter().zip(other.bits).map(|(x, y)| x | y).collect();
+        self.bits = self
+            .bits
+            .iter()
+            .zip(other.bits)
+            .map(|(x, y)| x | y)
+            .collect();
         self
     }
 
     pub fn bits(&mut self) -> Vec<u8> {
         self.bits.clone()
     }
-    
+}
+
+impl BitAndAssign for BitArray {
+    fn bitand_assign(&mut self, rhs: Self) {
+        assert_eq!(self.bits.len(), rhs.bits.len());
+        self.bits = self
+            .bits
+            .iter()
+            .zip(rhs.bits.iter())
+            .map(|(x, y)| *x & *y)
+            .collect();
+    }
+}
+
+impl BitOrAssign for BitArray {
+    fn bitor_assign(&mut self, rhs: Self) {
+        assert_eq!(self.bits.len(), rhs.bits.len());
+        self.bits = self
+            .bits
+            .iter()
+            .zip(rhs.bits.iter())
+            .map(|(x, y)| *x | *y)
+            .collect();
+    }
 }

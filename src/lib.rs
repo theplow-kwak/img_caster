@@ -6,6 +6,7 @@ pub mod multicast;
 pub mod packet;
 pub mod bitarray;
 pub mod databuffer;
+pub mod statistics;
 
 pub fn kbdcheck(ch: char) -> bool {
     if event::poll(std::time::Duration::from_millis(0)).unwrap() {

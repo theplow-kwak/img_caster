@@ -1,11 +1,11 @@
+use encoding::all::WINDOWS_949;
+use encoding::{DecoderTrap, EncoderTrap, Encoding};
 use log::{debug, error, info, trace, warn};
 use socket2::{Domain, SockAddr, Socket, Type};
 use std::env;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
-use std::process::Command;
-use encoding::{Encoding, EncoderTrap, DecoderTrap};
-use encoding::all::WINDOWS_949; // Windows-949는 한글 인코딩입니다.
+use std::process::Command; // Windows-949는 한글 인코딩입니다.
 
 pub struct MultiCast {
     socket: UdpSocket,
@@ -71,9 +71,9 @@ impl MultiCast {
     pub fn receiver() -> MultiCast {
         // Create a socket
         let socket = Socket::new(Domain::IPV4, Type::DGRAM, None).unwrap();
-        socket.set_nonblocking(true).unwrap();
+        // socket.set_nonblocking(true).unwrap();
 
-        let rcvbuf_size = 4096;
+        let rcvbuf_size = 2048*2048*2;
         socket.set_recv_buffer_size(rcvbuf_size);
 
         let addr: SocketAddr = "0.0.0.0:9000".parse().unwrap();
@@ -147,48 +147,6 @@ impl MultiCast {
     }
 }
 
-// socket.set_nonblocking(true).expect("Failed to set non-blocking mode");
-
-// loop {
-//     let mut buffer = [0u8; 1024];
-//     match socket.recv_from(&mut buffer) {
-//         Ok((size, _)) => {
-//             // Process received data
-//             // ...
-//         }
-//         Err(ref err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-//             // No data received yet, do other tasks or sleep for a while
-//             std::thread::sleep(Duration::from_millis(10));
-//         }
-//         Err(err) => {
-//             // Handle error
-//             println!("Error: {}", err);
-//             break;
-//         }
-//     }
-// }
-
-// socket.set_nonblocking(true)?;
-
-// let mut buffer = [0; 1024];
-// let timeout_duration = Duration::from_secs(1); // Set a timeout of 1 second
-
-// loop {
-//     match socket.recv_from(&mut buffer) {
-//         Ok((size, address)) => {
-//             // Process received data
-//             // ...
-//         }
-//         Err(ref err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-//             // Handle timeout or perform other tasks
-//             // ...
-//         }
-//         Err(err) => {
-//             // Handle other errors
-//             // ...
-//         }
-//     }
-// }
 
 fn rcvbuffer() {
     use socket2::{SockAddr, Socket, Type};
