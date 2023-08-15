@@ -1,45 +1,50 @@
-use encoding::all::WINDOWS_949;
-use encoding::{DecoderTrap, EncoderTrap, Encoding};
+use crate::packet::Message;
+use crate::*;
+
+use ipnet::Ipv4Net;
 use log::{debug, error, info, trace, warn};
-use socket2::{Domain, SockAddr, Socket, Type};
-use std::env;
+use socket2::{Domain, Socket, Type};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
-use std::process::Command; // Windows-949는 한글 인코딩입니다.
-
-pub struct MultiCast {
-    socket: UdpSocket,
-    multicast_addr: Ipv4Addr,
-    multicast_group: SocketAddrV4,
-}
+use std::process::Command;
+use std::time::Duration;
 
 #[derive(Debug)]
-pub struct NetworkInterface {
+struct NetworkInterface {
     ip_address: Option<String>,
     subnet_mask: Option<String>,
 }
 
-fn convert_to_english(input: &str) -> String {
-    let encoded_bytes = WINDOWS_949.encode(input, EncoderTrap::Replace).unwrap();
-    String::from_utf8_lossy(&encoded_bytes).to_string()
+impl From<NetworkInterface> for Ipv4Net {
+    fn from(interface: NetworkInterface) -> Ipv4Net {
+        Ipv4Net::with_netmask(
+            interface
+                .ip_address
+                .expect("Can't get ip address")
+                .parse()
+                .expect("Unable to parse socket address"),
+            interface
+                .subnet_mask
+                .expect("Can't get subnet mask")
+                .parse()
+                .expect("Unable to parse socket address"),
+        )
+        .expect("Unable to parse socket address")
+    }
 }
 
-pub fn parse_ipconfig_output() -> Vec<NetworkInterface> {
+fn get_ipconfig() -> Vec<Ipv4Net> {
+    let mut interfaces: Vec<Ipv4Net> = Vec::new();
+    let mut current_interface: Option<NetworkInterface> = None;
+    let mut is_taken = false;
+
     let output = Command::new("ipconfig")
-        .env("LANG", "en-US") // Set LANG environment variable to "en-US"
         .output()
-        .expect("Failed to execute ipconfig.");
+        .expect("Failed to execute ipconfig");
 
     let output = String::from_utf8_lossy(&output.stdout);
-    // info!("{}", output);
-    // let english_output = convert_to_english(&output);
-    // info!("{}", english_output);
-
-    let mut interfaces: Vec<NetworkInterface> = Vec::new();
-    let mut current_interface: Option<NetworkInterface> = None;
 
     for line in output.lines() {
-        info!("{}", line);
         if line.starts_with("Ethernet adapter") {
             current_interface = Some(NetworkInterface {
                 ip_address: None,
@@ -50,136 +55,179 @@ pub fn parse_ipconfig_output() -> Vec<NetworkInterface> {
                 let parts: Vec<&str> = line.trim().split(':').collect();
                 if let Some(ip_str) = parts.get(1) {
                     interface.ip_address = Some(ip_str.trim().to_string());
+                    is_taken = true;
                 }
             } else if line.trim().starts_with("Subnet Mask") {
                 let parts: Vec<&str> = line.trim().split(':').collect();
                 if let Some(subnet_mask_str) = parts.get(1) {
                     interface.subnet_mask = Some(subnet_mask_str.trim().to_string());
                 }
-            } else if line.trim().is_empty() {
+            } else if line.trim().is_empty() && is_taken {
                 if let Some(interface) = current_interface.take() {
-                    interfaces.push(interface);
+                    interfaces.push(Ipv4Net::from(interface));
+                    is_taken = false;
                 }
             }
         }
     }
 
+    if let Some(interface) = current_interface.take() {
+        interfaces.push(Ipv4Net::from(interface));
+    }
+
     interfaces
 }
 
+#[derive(Debug)]
+pub struct MultiCast {
+    socket: UdpSocket,
+    pub myip_addr: SocketAddrV4,
+    pub broadcast_addr: SocketAddrV4,
+    pub multicast_addr: SocketAddrV4,
+    pub receivefrom: Option<SocketAddrV4>,
+    pub packet_count: usize,
+}
+
 impl MultiCast {
-    pub fn receiver() -> MultiCast {
-        // Create a socket
-        let socket = Socket::new(Domain::IPV4, Type::DGRAM, None).unwrap();
-        // socket.set_nonblocking(true).unwrap();
+    pub fn receiver(nic: usize, rcvbuf: usize) -> Self {
+        let myip_net = get_default_interface(); // get_ipconfig()[nic];
+        let myip_addr: SocketAddrV4 = SocketAddrV4::new(myip_net.addr(), PORTBASE);
 
-        let rcvbuf_size = 2048*2048*2;
-        socket.set_recv_buffer_size(rcvbuf_size);
+        let broadcast_addr = SocketAddrV4::new(myip_net.broadcast(), PORTBASE + 1);
+        let multicast_addr = Ipv4Addr::from(u32::from(myip_net.addr()) & 0x07ffffff | 0xe8000000);
+        let multicast_addr = SocketAddrV4::new(multicast_addr, PORTBASE + 1);
 
-        let addr: SocketAddr = "0.0.0.0:9000".parse().unwrap();
-        socket.bind(&addr.into());
-
-        let socket: UdpSocket = socket.into();
-        let multicast_addr = Ipv4Addr::new(239, 0, 0, 1);
-        let multicast_group = SocketAddrV4::new(multicast_addr, 9000);
-        let mut sockaddr_multicast = SockAddr::from(multicast_group);
-
-        // Join the multicast group
-        socket
-            .join_multicast_v4(&multicast_addr, &Ipv4Addr::new(0, 0, 0, 0))
-            .expect("Failed to join multicast group");
-
-        MultiCast {
-            socket,
-            multicast_addr,
-            multicast_group,
-        }
-    }
-
-    pub fn sender() -> MultiCast {
         // Create a UDP socket
-        // let socket = UdpSocket::bind("0.0.0.0:0").expect("Failed to bind socket");
         let socket = Socket::new(Domain::IPV4, Type::DGRAM, None).unwrap();
+        let _ = socket.set_recv_buffer_size(rcvbuf);
+        let _ = socket.set_read_timeout(Some(Duration::from_millis(100)));
+        let _ = socket.bind(&myip_addr.into());
+
         let socket: UdpSocket = socket.into();
 
-        // Set the TTL (time to live) for multicast packets
-        socket.set_multicast_ttl_v4(2).expect("Failed to set TTL");
-        let multicast_addr = Ipv4Addr::new(239, 0, 0, 1);
-        let multicast_group = SocketAddrV4::new(multicast_addr, 9000);
-        let mut sockaddr_multicast = SockAddr::from(multicast_group);
-
-        // Join the multicast group
-        socket
-            .join_multicast_v4(&multicast_addr, &Ipv4Addr::new(0, 0, 0, 0))
-            .expect("Failed to join multicast group");
-
-        MultiCast {
+        Self {
             socket,
+            myip_addr,
+            broadcast_addr,
             multicast_addr,
-            multicast_group,
+            receivefrom: None,
+            packet_count: 0,
         }
     }
 
-    pub fn send_msg(&mut self, message: &[u8]) {
-        // println!("Sent to {:?}: '{:?}'\n", self.multicast_group, message);
+    pub fn sender(nic: usize) -> Self {
+        let myip_net = get_default_interface(); // get_ipconfig()[nic];
+        let myip_addr: SocketAddrV4 = SocketAddrV4::new(myip_net.addr(), PORTBASE + 1);
+
+        let broadcast_addr = SocketAddrV4::new(myip_net.broadcast(), PORTBASE);
+        let multicast_addr = Ipv4Addr::from(u32::from(myip_net.addr()) & 0x07ffffff | 0xe8000000);
+        let multicast_addr = SocketAddrV4::new(multicast_addr, PORTBASE);
+
+        // Create a UDP socket
+        let socket = UdpSocket::bind(myip_addr.to_string()).expect("Failed to bind socket");
+
+        let _ = socket.set_read_timeout(Some(Duration::from_millis(100)));
+
+        Self {
+            socket,
+            myip_addr,
+            broadcast_addr,
+            multicast_addr,
+            receivefrom: None,
+            packet_count: 0,
+        }
+    }
+
+    pub fn set_ttl(&self, ttl: u32) -> io::Result<()> {
+        self.socket.set_multicast_ttl_v4(ttl)
+    }
+
+    pub fn set_broadcast(&self) -> io::Result<()> {
+        self.socket.set_broadcast(true)
+    }
+
+    pub fn join_multicast(&self) -> io::Result<()> {
         self.socket
-            .send_to(message, &self.multicast_group)
-            .expect("Failed to send multicast packet");
+            .join_multicast_v4(&self.multicast_addr.ip(), &self.myip_addr.ip())
     }
 
-    pub fn recv_msg(&mut self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        self.socket.recv_from(buf)
-        // let (size, src_addr) = self.socket.recv_from(buf).expect("Failed to receive multicast packet");
-        // println!("Receive multicast message: '{:?}'", &buf[..size]);
-        // loop {
-        //     match self.socket.recv_from(buf) {
-        //         Ok((size, address)) => return (size, address),
-        //         Err(ref err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-        //             // Handle timeout or perform other tasks
-        //             // ...
-        //         }
-        //         Err(err) => {
-        //             // Handle other errors
-        //             // ...
-        //         }
-        //     }
-        // }
+    pub fn set_nonblocking(&mut self) -> io::Result<()> {
+        self.socket.set_nonblocking(true)
     }
-}
 
+    pub fn send_msg(&mut self, message: &[u8]) -> io::Result<usize> {
+        self.packet_count += 1;
+        if let Some(rcvfrom) = self.receivefrom {
+            self.socket.send_to(message, rcvfrom)
+        } else {
+            self.socket.send_to(message, self.multicast_addr)
+        }
+    }
 
-fn rcvbuffer() {
-    use socket2::{SockAddr, Socket, Type};
-    use std::net::UdpSocket;
+    pub fn send_to(&mut self, message: &[u8], sendto: SocketAddrV4) -> io::Result<usize> {
+        self.packet_count += 1;
+        self.socket.send_to(message, sendto)
+    }
 
-    let socket = Socket::new(Domain::IPV4, Type::DGRAM, None).unwrap();
-    socket.set_recv_buffer_size(1024 * 1024).unwrap(); // Set the receive buffer size to 1MB
-    let udp_socket = UdpSocket::from(socket);
-}
-
-fn nonblocking() {
-    use std::time::Duration;
-
-    let socket = UdpSocket::bind("0.0.0.0:12345").unwrap();
-    socket.set_nonblocking(true).unwrap();
-
-    let mut buffer = [0; 1024];
-    let timeout_duration = Duration::from_secs(1); // Set a timeout of 1 second
-
-    loop {
-        match socket.recv_from(&mut buffer) {
+    pub fn recv_msg(&mut self, buf: &mut [u8]) -> io::Result<(Message, Vec<u8>)> {
+        self.packet_count += 1;
+        match self.socket.recv_from(buf) {
             Ok((size, address)) => {
-                // Process received data
-                // ...
+                let (msg, remain) = Message::decode(&buf[..size]);
+                match address {
+                    SocketAddr::V4(v4) => self.receivefrom = Some(v4),
+                    _ => self.receivefrom = None,
+                }
+                trace!("message {:?} from {address}", msg);
+                return Ok((msg, remain));
             }
-            Err(ref err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                // Handle timeout or perform other tasks
-                // ...
-            }
-            Err(err) => {
-                // Handle other errors
-                // ...
-            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+pub fn get_interfaces() {
+    let interfaces = default_net::get_interfaces();
+    for interface in interfaces {
+        println!("Interface");
+        println!("\tIndex: {}", interface.index);
+        println!("\tName: {}", interface.name);
+        println!("\tFriendly Name: {:?}", interface.friendly_name);
+        println!("\tDescription: {:?}", interface.description);
+        println!("\tType: {}", interface.if_type.name());
+        if let Some(mac_addr) = interface.mac_addr {
+            println!("\tMAC: {}", mac_addr);
+        } else {
+            println!("\tMAC: (Failed to get mac address)");
+        }
+        println!("\tIPv4: {:?}", interface.ipv4);
+        println!("\tIPv6: {:?}", interface.ipv6);
+        println!("\tFlags: {:?}", interface.flags);
+        println!("\tTransmit Speed: {:?}", interface.transmit_speed);
+        println!("\tReceive Speed: {:?}", interface.receive_speed);
+        if let Some(gateway) = interface.gateway {
+            println!("Gateway");
+            println!("\tMAC: {}", gateway.mac_addr);
+            println!("\tIP: {}", gateway.ip_addr);
+        } else {
+            println!("Gateway: (Not found)");
+        }
+        println!();
+    }
+}
+
+pub fn get_default_interface() -> Ipv4Net {
+    match default_net::get_default_interface() {
+        Ok(default_interface) => {
+            return Ipv4Net::new(
+                default_interface.ipv4[0].addr,
+                default_interface.ipv4[0].prefix_len,
+            )
+            .expect("can't get default ip");
+        }
+        Err(e) => {
+            println!("{}", e);
+            Ipv4Net::default()
         }
     }
 }

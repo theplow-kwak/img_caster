@@ -24,3 +24,6 @@ simplelog = "0.12"
 encoding-next = "0.3"
 default-net = "0.17"
 system-info = "0.1.2"
+ipnet = "2.8"
+byte-unit = "4.0.19"
+clap = { version = "4.3.21", features = ["derive"] }
