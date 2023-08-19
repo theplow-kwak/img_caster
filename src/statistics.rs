@@ -127,3 +127,26 @@ impl Sub for State {
         }
     }
 }
+
+pub struct Statistics {
+    start_time: Instant,
+    state: State,
+    elaps: Vec<State>,
+    written_elaps: u128,
+}
+
+impl Statistics {
+    pub fn new() -> Self {
+        Self {
+            start_time: Instant::now(),
+            state: State::default(),
+            elaps: Vec::new(),
+            written_elaps: 0,
+        }
+    }
+
+    pub fn start(&mut self) {
+        self.start_time = Instant::now()
+    }
+
+}

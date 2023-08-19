@@ -5,12 +5,12 @@ use std::io;
 use std::io::{Error, ErrorKind};
 use std::io::{Read, Write};
 use std::net::SocketAddrV4;
-use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::bitarray::BitArray;
 use crate::datafifo::DataFIFO;
+use crate::disk::Disk;
 use crate::multicast::*;
 use crate::packet::*;
 use crate::slice::Slice;
@@ -19,6 +19,7 @@ use crate::*;
 #[derive(Debug)]
 pub struct McastSender {
     pub socket: MultiCast,
+    pub disk: Option<Disk>,
     data_fifo: DataFIFO,
     blocksize: u32,
     capabilities: u32,
@@ -33,21 +34,30 @@ pub struct McastSender {
     elaps_time: Instant,
     lastsendtime: Instant,
     written_elaps: u128,
-    rx: std::sync::mpsc::Receiver<Vec<u8>>,
 }
 
 impl McastSender {
     pub fn new(
         nic: usize,
+        filename: &str,
+        transfer_size: usize,
         ttl: u32,
         max_slices: u32,
-        rx: std::sync::mpsc::Receiver<Vec<u8>>,
     ) -> Self {
         let socket = MultiCast::sender(nic);
         let _ = socket.set_ttl(ttl);
 
+        let mut disk = Disk::open(filename.to_string(), 'r');
+        if let Some(ref mut disk) = disk {
+            if transfer_size > 0 {
+                disk.size = transfer_size;
+            }
+            info!("{:?}", disk);
+        }
+
         Self {
             socket,
+            disk,
             max_slices,
             blocksize: BLOCK_SIZE,
             capabilities: 0,
@@ -62,7 +72,6 @@ impl McastSender {
             elaps_time: Instant::now(),
             lastsendtime: Instant::now(),
             written_elaps: 0,
-            rx,
         }
     }
 
@@ -224,21 +233,22 @@ impl McastSender {
             }
             let writtenbytes = self.data_fifo.written_bytes() as u128;
             let mbps = writtenbytes / difftime.as_millis();
-            print!(
-                "Total: {} ({}.{:0<3} MB/s) {:>6} pps, slicesize={}",
+            let mut embps = 0;
+            if elapsed.as_millis() > 0 {
+                embps = (writtenbytes - self.written_elaps) / elapsed.as_millis();
+            }
+            info!(
+                "Total: {} ({}.{:0<3} MB/s) {:>6} pps, slicesize={}, elaps: ({}.{:0<3} MB/s)",
                 Byte::from_bytes(writtenbytes)
                     .get_appropriate_unit(false)
                     .to_string(),
                 mbps / 1000,
                 mbps % 1000,
                 self.socket.packet_count,
-                self.slice_size
+                self.slice_size,
+                embps / 1000,
+                embps % 1000
             );
-            if elapsed.as_millis() > 0 {
-                let mbps = (writtenbytes - self.written_elaps) / elapsed.as_millis();
-                print!(", elaps: ({}.{:0<3} MB/s)", mbps / 1000, mbps % 1000,);
-            }
-            print!("{}\n", " ".repeat(10));
             self.written_elaps = writtenbytes;
             let _ = std::io::stdout().flush();
             self.elaps_time = Instant::now();
@@ -316,24 +326,20 @@ impl McastSender {
     }
 
     pub fn read(&mut self) -> bool {
-        let mut retrys = 0;
         let mut required: usize = MAX_BUFFER_SIZE - self.data_fifo.len();
         if (required % self.read_chunk) != 0 {
             required -= required % self.read_chunk;
         }
-        trace!("read: ");
-        while required > 0 {
-            if let Ok(mut buff) = self.rx.recv_timeout(Duration::from_millis(100)) {
-                trace!("read {} bytes", buff.len());
-                if buff.len() > 0 {
-                    self.data_fifo.push(&mut buff);
-                    required -= buff.len();
+        if let Some(ref mut disk) = self.disk {
+            if self.data_fifo.endpoint >= disk.size {
+                return false;
+            }
+            let mut buff = Box::new(vec![0u8; required]);
+            if let Ok(size) = disk.read(&mut buff) {
+                trace!("read {size} bytes");
+                if size > 0 {
+                    self.data_fifo.push(&mut buff[..size]);
                 }
-            } else {
-                if retrys > 100 {
-                    return false;
-                }
-                retrys += 1;
             }
         }
         return true;

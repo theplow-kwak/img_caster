@@ -1,74 +1,112 @@
-use std::io;
-use std::io::Write; // <--- bring flush() into scope
-use std::time::{Duration, Instant};
+use byte_unit::Byte;
+use clap::Parser;
+use log::{debug, error, info, trace, warn, LevelFilter};
+use simplelog::*;
+use std::fs::File;
+use std::str::FromStr;
 
-use img_caster::disk::DiskHandler;
-use img_caster::multicast::MultiCast;
-use img_caster::packet::Message;
-use img_caster::statistics;
+use img_caster::receiver;
+use img_caster::*;
 
-use bincode::{deserialize, serialize, Result};
-use device_query::{DeviceQuery, DeviceState, Keycode};
-use serde::{Deserialize, Serialize};
+#[derive(Parser, Default, Debug)]
+#[clap(author, version, about)]
+/// Receiver for Multicast File Transfer
+struct Args {
+    /// File name to save the received data.
+    #[clap(short, long, value_name = "FILE")]
+    filepath: Option<String>,
+
+    /// PhysicalDrive number. ex) 1 -> "\\.\PhysicalDrive1"
+    #[clap(short, long)]
+    driveno: Option<u8>,
+
+    /// Specifie the network card.
+    #[clap(short, long, default_value = "0")]
+    nic: Option<usize>,
+
+    /// Number of sectors to set Write chunk size.
+    #[clap(short, long)]
+    chunk: Option<String>,
+
+    /// Receive buffer size.
+    #[clap(short, long, default_value = "8MiB")]
+    rcvbuf: Option<String>,
+
+    /// set to Async file write
+    #[clap(short, long)]
+    async_mode: bool,
+
+    /// Log file name
+    #[clap(short, long)]
+    log: Option<String>,
+
+    #[clap(long, default_value = "info")]
+    loglevel: Option<String>,
+}
+
+fn init_logger(args: &Args) {
+    // initialize logger
+    let loglevel = args.loglevel.as_ref().unwrap();
+    let termlog = TermLogger::new(
+        LevelFilter::from_str(&loglevel).unwrap(),
+        Config::default(),
+        TerminalMode::Mixed,
+        ColorChoice::Auto,
+    );
+    let mut logger: Vec<Box<dyn SharedLogger>> = vec![termlog];
+
+    if let Some(logfile) = args.log.as_ref() {
+        let flog = WriteLogger::new(
+            LevelFilter::from_str(&loglevel).unwrap(),
+            Config::default(),
+            File::create(logfile).unwrap(),
+        );
+        logger.push(flog);
+    }
+    let _ = CombinedLogger::init(logger);
+}
 
 fn main() {
-    // Create a UDP socket
-    let mut receiver = MultiCast::receiver();
+    let args = Args::parse();
 
-    let mut buf = [0u8; 1024];
-    let mut count = 0;
-    let mut start = Instant::now();
-    let mut elapstime = Instant::now();
-    let mut unpacked_message: Option<Message> = None;
-    let mut receive_bytes: usize = 0;
-    let mut state = statistics::State::default();
-    let mut latency = Instant::now();
-    let mut snap = state.now();
+    let mut filename = String::from("");
+    if let Some(filepath) = args.filepath.as_deref() {
+        filename = filepath.to_string();
+    }
+    if let Some(driveno) = args.driveno {
+        filename = format!("\\\\.\\PhysicalDrive{driveno}");
+    }
+
+    init_logger(&args);
+
+    let rcvbuf = Byte::from_str(args.rcvbuf.unwrap()).unwrap().get_bytes() as usize;
+    let mut receiver = receiver::McastReceiver::new(args.nic.unwrap_or(0), &filename, rcvbuf);
+
+    let _ = receiver.enumerate();
+
+    if let Some(chunk) = args.chunk {
+        receiver.write_chunk = Byte::from_str(chunk).unwrap().get_bytes() as usize * SECTOR_SIZE;
+    }
+
+    println!("\nPress 'Enter' to start receiving data!\n");
 
     loop {
-        latency = Instant::now();
-        match receiver.recv_msg(&mut buf) {
-            Ok((size, address)) => {
-                state.add_net(latency.elapsed(), size);
-                unpacked_message = Some(Message::decode(&buf));
-                // println!("message {:?}", unpacked_message);
-                // println!("serialize {:?}\n", serialize(&unpacked_message).unwrap());
-                count += 1;
-                receive_bytes += size;
-                state.add_io(latency.elapsed(), size);
-                if elapstime.elapsed().as_secs() >= 1 {
-                    let (size, unit) = img_caster::format_size(receive_bytes as u64);
-                    print!("Bytes = {size} {unit}, {count} pps ");
-                    print!("state {:?}", state.now() - snap);
-                    print!("\n");
-                    io::stdout().flush().unwrap();
-                    elapstime = Instant::now();
-                    snap = state.now();
-                    count = 0;
-                    if img_caster::kbdcheck('q') {
-                        break;
-                    }
-                }
+        if let Ok(running) = receiver.dispatch_message() {
+            if !running {
+                break;
             }
-            Err(ref err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                if elapstime.elapsed().as_secs() >= 1 {
-                    let (size, unit) = img_caster::format_size(receive_bytes as u64);
-                    print!("Bytes = {size} {unit}, {count} pps ");
-                    print!("state {:?}", state.now() - snap);
-                    print!("\n");
-                    io::stdout().flush().unwrap();
-                    elapstime = Instant::now();
-                    snap = state.now();
-                    count = 0;
-                    if img_caster::kbdcheck('q') {
-                        break;
-                    }
+        }
+        if !receiver.transferstarted {
+            if let Some(c) = getch(0) {
+                if c == '\r' {
+                    receiver.start_transfer();
                 }
-            }
-            Err(err) => {
-                // Handle other errors
-                // ...
+                if c == 'q' {
+                    break;
+                }
             }
         }
     }
+    receiver.display_progress(true);
+    let _ = receiver.send_disconnect();
 }

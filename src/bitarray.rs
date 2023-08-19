@@ -1,8 +1,6 @@
-use bincode::{deserialize, serialize, Result};
-use serde::{Deserialize, Serialize};
 use std::ops::{BitAndAssign, BitOrAssign};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct BitArray {
     bits: Vec<u8>,
     size: usize,
@@ -16,22 +14,25 @@ impl BitArray {
         Self { bits, size }
     }
 
-    pub fn clear(&mut self, index: usize) {
-        assert!(index < self.size, "Index out of range");
-
-        let byte_index = index / 8;
-        let bit_index = index % 8;
-
-        self.bits[byte_index] &= !(1 << bit_index);
+    pub fn resize(&mut self, size: usize) -> &mut Self {
+        let new_len = (size + 7) / 8;
+        self.bits.resize(new_len, 0);
+        self.size = size;
+        self
     }
 
-    pub fn set(&mut self, index: usize) {
+    pub fn set(&mut self, index: usize, value: bool) -> &mut Self {
         assert!(index < self.size, "Index out of range");
 
         let byte_index = index / 8;
         let bit_index = index % 8;
 
-        self.bits[byte_index] |= 1 << bit_index;
+        if value {
+            self.bits[byte_index] |= 1 << bit_index;
+        } else {
+            self.bits[byte_index] &= !(1 << bit_index);
+        }
+        self
     }
 
     pub fn get(&mut self, index: usize) -> bool {
@@ -40,7 +41,7 @@ impl BitArray {
         let byte_index = index / 8;
         let bit_index = index % 8;
 
-        (self.bits[byte_index] & (1 << bit_index)) != 0
+        (self.bits[byte_index as usize] & (1 << bit_index)) != 0
     }
 
     pub fn bits_or(&mut self, other: BitArray) -> &mut Self {
@@ -55,6 +56,12 @@ impl BitArray {
 
     pub fn bits(&mut self) -> Vec<u8> {
         self.bits.clone()
+    }
+
+    pub fn from(data: Vec<u8>) -> Self {
+        let size = data.len();
+        let bits = data;
+        Self { bits, size }
     }
 }
 

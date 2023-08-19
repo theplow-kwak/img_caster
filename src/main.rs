@@ -3,6 +3,7 @@ use std::fs::File;
 use std::io::{Read, Result};
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 
 #[derive(Parser, Default, Debug)]
@@ -18,28 +19,41 @@ struct Args {
     driveno: Option<u8>,
 }
 
-fn main() -> Result<()> {
-    let args = Args::parse();
-    let mut filename = String::from("");
+#[derive(Default, Debug)]
+struct MyStruct {
+    data: Box<Vec<u8>>,
+    start: usize,
+    end: usize,
+    index: usize,
+}
 
-    if let Some(filepath) = args.filepath.as_deref() {
-        filename = filepath.to_string();
-    }
+fn main() {
+    let my_struct = MyStruct {
+        data: Box::new(Vec::new()),
+        start: 0,
+        end: 0,
+        index: 0,
+    };
 
-    get_interfaces();
-    
-    let file = File::open(filename)?;
-    let (tx, rx) = mpsc::channel();
-    let socket = UdpSocket::bind("127.0.0.1:12345")?;
-    let sender_thread = thread::spawn(move || {
-        udp_sender(socket, rx);
+    let shared_data = Arc::new(RwLock::new(my_struct));
+
+    let thread_shared_data = Arc::clone(&shared_data);
+    let sub_thread = thread::spawn(move || {
+        // Access the shared data in the sub-thread
+        let mut data = thread_shared_data.write().unwrap();
+        data.start = 100;
+        data.end = 200;
     });
 
-    read_and_send(&file, tx);
+    // Access the shared data in the main thread
+    let mut data = shared_data.write().unwrap();
+    data.index = 42;
 
-    sender_thread.join().unwrap();
+    // Wait for the sub-thread to finish
+    sub_thread.join().unwrap();
 
-    Ok(())
+    // Access and print modified data
+    println!("start: {}, end: {}, index: {}", data.start, data.end, data.index);
 }
 
 fn read_and_send(mut file: &File, tx: mpsc::Sender<Vec<u8>>) {
