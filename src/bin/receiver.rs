@@ -3,8 +3,14 @@ use clap::Parser;
 use log::{debug, error, info, trace, warn, LevelFilter};
 use simplelog::*;
 use std::fs::File;
+use std::io::{Read, Write};
 use std::str::FromStr;
+use std::sync::{Arc, RwLock};
+use std::thread;
+use std::time::Duration;
 
+use img_caster::datafifo::DataFIFO;
+use img_caster::disk::Disk;
 use img_caster::receiver;
 use img_caster::*;
 
@@ -44,6 +50,33 @@ struct Args {
     loglevel: Option<String>,
 }
 
+fn write(disk: &mut Option<Disk>, data_fifo: Arc<RwLock<DataFIFO>>) -> bool {
+    loop {
+        {
+            let mut data_fifo = data_fifo.write().unwrap();
+            let mut required: usize = data_fifo.len();
+            let size = data_fifo.slicebase - data_fifo.endpoint;
+            if data_fifo.startpoint != 0 && size == 0 && required == 0 {
+                return false;
+            }
+            if required > 0 {
+                if size > 0 && ((required % WRITE_CHUNK) != 0) {
+                    required -= required % WRITE_CHUNK;
+                }
+                if let Some(data) = data_fifo.pop(required) {
+                    if let Some(ref mut disk) = disk {
+                        let mut iter = data.chunks(WRITE_CHUNK);
+                        while let Some(data) = iter.next() {
+                            let _n = disk.write(&data);
+                        }
+                    }
+                }
+            }
+        }
+        thread::sleep(Duration::from_nanos(10));
+    }
+}
+
 fn init_logger(args: &Args) {
     // initialize logger
     let loglevel = args.loglevel.as_ref().unwrap();
@@ -79,8 +112,23 @@ fn main() {
 
     init_logger(&args);
 
+    // Open file
+    let mut disk = Disk::open(filename.to_string(), 'w');
+    if let Some(ref d) = disk {
+        info!("{:?}", d);
+    }
+
+    let data_fifo = Arc::new(RwLock::new(DataFIFO::new()));
+    let data_fifo_thread = Arc::clone(&data_fifo);
+    let data_fifo_socket = Arc::clone(&data_fifo);
+
     let rcvbuf = Byte::from_str(args.rcvbuf.unwrap()).unwrap().get_bytes() as usize;
-    let mut receiver = receiver::McastReceiver::new(args.nic.unwrap_or(0), &filename, rcvbuf);
+    let mut receiver =
+        receiver::McastReceiver::new(args.nic.unwrap_or(0), rcvbuf, data_fifo_socket);
+
+    let disk_thread = thread::spawn(move || {
+        write(&mut disk, data_fifo_thread);
+    });
 
     let _ = receiver.enumerate();
 
@@ -102,11 +150,12 @@ fn main() {
                     receiver.start_transfer();
                 }
                 if c == 'q' {
+                    let _ = receiver.send_disconnect();
                     break;
                 }
             }
         }
     }
     receiver.display_progress(true);
-    let _ = receiver.send_disconnect();
+    let _ = disk_thread.join();
 }

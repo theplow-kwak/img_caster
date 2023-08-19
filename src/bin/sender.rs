@@ -12,6 +12,7 @@ use std::time::Duration;
 use img_caster::datafifo::DataFIFO;
 use img_caster::disk::Disk;
 use img_caster::sender::McastSender;
+use img_caster::*;
 
 #[derive(Parser, Default, Debug, Clone)]
 #[clap(author, version, about)]
@@ -61,6 +62,28 @@ struct Args {
     loglevel: Option<String>,
 }
 
+fn read(disk: &mut Option<Disk>, data_fifo: Arc<RwLock<DataFIFO>>) -> bool {
+    loop {
+        let mut required: usize = MAX_BUFFER_SIZE - data_fifo.read().unwrap().len();
+        if (required % READ_CHUNK) != 0 {
+            required -= required % READ_CHUNK;
+        }
+        if let Some(ref mut disk) = disk {
+            if data_fifo.read().unwrap().endpoint >= disk.size {
+                info!("read end");
+                return false;
+            }
+            let mut buff = Box::new(vec![0u8; required]);
+            if let Ok(size) = disk.read(&mut buff) {
+                trace!("read {size} bytes");
+                if size > 0 {
+                    data_fifo.write().unwrap().push(&mut buff[..size]);
+                }
+            }
+        }
+    }
+}
+
 fn init_logger(args: &Args) {
     // initialize logger
     let loglevel = args.loglevel.as_ref().unwrap();
@@ -102,13 +125,13 @@ fn main() {
     }
 
     // Open file
-    // let mut disk = Disk::open(filename.to_string(), 'r');
-    // if let Some(ref mut disk) = disk {
-    //     if transfer_size > 0 {
-    //         disk.size = transfer_size;
-    //     }
-    //     info!("{:?}", disk);
-    // }
+    let mut disk = Disk::open(filename.to_string(), 'r');
+    if let Some(ref mut disk) = disk {
+        if transfer_size > 0 {
+            disk.size = transfer_size;
+        }
+        info!("{:?}", disk);
+    }
 
     let data_fifo = Arc::new(RwLock::new(DataFIFO::new()));
     let data_fifo_thread = Arc::clone(&data_fifo);
@@ -117,11 +140,14 @@ fn main() {
     // Open Network socket sender
     let mut sender = McastSender::new(
         args.nic.unwrap_or(0),
-        &filename,
-        transfer_size,
         args.ttl.unwrap(),
         Byte::from_str(args.slices.unwrap()).unwrap().get_bytes() as u32,
+        data_fifo_socket,
     );
+
+    let disk_thread = thread::spawn(move || {
+        read(&mut disk, data_fifo_thread);
+    });
 
     if let Err(err) = sender.enumerate(Duration::new(args.wait.unwrap_or(60 * 5), 0), args.p2p) {
         error!("{:?}", err);
@@ -139,4 +165,5 @@ fn main() {
         }
     }
     sender.display_progress(true);
+    let _ = disk_thread.join();
 }

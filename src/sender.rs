@@ -5,6 +5,7 @@ use std::io;
 use std::io::{Error, ErrorKind};
 use std::io::{Read, Write};
 use std::net::SocketAddrV4;
+use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -19,8 +20,7 @@ use crate::*;
 #[derive(Debug)]
 pub struct McastSender {
     pub socket: MultiCast,
-    pub disk: Option<Disk>,
-    data_fifo: DataFIFO,
+    data_fifo: Arc<RwLock<DataFIFO>>,
     blocksize: u32,
     capabilities: u32,
     clientlist: HashMap<SocketAddrV4, (usize, u32, u32)>,
@@ -28,7 +28,6 @@ pub struct McastSender {
     xmit_slice: i32,
     slice_size: u32,
     max_slices: u32,
-    pub read_chunk: usize,
     retransmits: u32,
     start_time: Instant,
     elaps_time: Instant,
@@ -37,37 +36,21 @@ pub struct McastSender {
 }
 
 impl McastSender {
-    pub fn new(
-        nic: usize,
-        filename: &str,
-        transfer_size: usize,
-        ttl: u32,
-        max_slices: u32,
-    ) -> Self {
+    pub fn new(nic: usize, ttl: u32, max_slices: u32, data_fifo: Arc<RwLock<DataFIFO>>) -> Self {
         let socket = MultiCast::sender(nic);
         let _ = socket.set_ttl(ttl);
 
-        let mut disk = Disk::open(filename.to_string(), 'r');
-        if let Some(ref mut disk) = disk {
-            if transfer_size > 0 {
-                disk.size = transfer_size;
-            }
-            info!("{:?}", disk);
-        }
-
         Self {
             socket,
-            disk,
             max_slices,
+            data_fifo,
             blocksize: BLOCK_SIZE,
             capabilities: 0,
             retransmits: 0,
             slice_size: 130,
-            read_chunk: CHUNK_SIZE * 16,
             xmit_slice: -1,
             clientlist: HashMap::new(),
             slices: HashMap::new(),
-            data_fifo: DataFIFO::new(),
             start_time: Instant::now(),
             elaps_time: Instant::now(),
             lastsendtime: Instant::now(),
@@ -216,6 +199,8 @@ impl McastSender {
             .encode();
             let data = self
                 .data_fifo
+                .write()
+                .unwrap()
                 .get(slice.get_block_pos(blockno), self.blocksize as u32);
             msg.append(&mut data.to_vec());
             self.socket.send_to(&msg, self.socket.multicast_addr)
@@ -231,7 +216,7 @@ impl McastSender {
             if difftime.as_millis() == 0 {
                 return;
             }
-            let writtenbytes = self.data_fifo.written_bytes() as u128;
+            let writtenbytes = self.data_fifo.read().unwrap().written_bytes() as u128;
             let mbps = writtenbytes / difftime.as_millis();
             let mut embps = 0;
             if elapsed.as_millis() > 0 {
@@ -258,7 +243,7 @@ impl McastSender {
             println!("\n");
             info!(
                 "{} transferd in {:?}",
-                Byte::from_bytes(self.data_fifo.written_bytes() as u128)
+                Byte::from_bytes(self.data_fifo.read().unwrap().written_bytes() as u128)
                     .get_appropriate_unit(false)
                     .to_string(),
                 self.start_time.elapsed()
@@ -268,24 +253,23 @@ impl McastSender {
 
     fn make_slice(&mut self, block_size: u32, slice_size: u32) -> &mut Slice {
         let mut slice_size = slice_size;
-        if block_size as u32 * slice_size
-            > (self.data_fifo.endpoint - self.data_fifo.slicebase) as u32
-        {
-            slice_size = (self.data_fifo.endpoint - self.data_fifo.slicebase) as u32 / block_size;
+        let remain = self.data_fifo.read().unwrap().remain();
+        if block_size as u32 * slice_size > remain as u32 {
+            slice_size = remain as u32 / block_size;
         }
         let mut size = block_size * slice_size;
         if size == 0 {
-            size = (self.data_fifo.endpoint - self.data_fifo.slicebase) as u32;
+            size = remain as u32;
         }
         let slice_no = self.slices.len() as u32;
         let slice = Slice::new(
             slice_no,
             size,
             block_size,
-            self.data_fifo.slicebase,
+            self.data_fifo.read().unwrap().slicebase,
             self.max_slices,
         );
-        self.data_fifo.assign(size);
+        self.data_fifo.write().unwrap().assign(size);
         self.slices.insert(slice_no, slice);
         self.xmit_slice = slice_no as i32;
         let slice = self.slices.get_mut(&slice_no).unwrap();
@@ -325,26 +309,6 @@ impl McastSender {
         let _ = self.send_reqack();
     }
 
-    pub fn read(&mut self) -> bool {
-        let mut required: usize = MAX_BUFFER_SIZE - self.data_fifo.len();
-        if (required % self.read_chunk) != 0 {
-            required -= required % self.read_chunk;
-        }
-        if let Some(ref mut disk) = self.disk {
-            if self.data_fifo.endpoint >= disk.size {
-                return false;
-            }
-            let mut buff = Box::new(vec![0u8; required]);
-            if let Ok(size) = disk.read(&mut buff) {
-                trace!("read {size} bytes");
-                if size > 0 {
-                    self.data_fifo.push(&mut buff[..size]);
-                }
-            }
-        }
-        return true;
-    }
-
     pub fn transfer_data(&mut self) -> bool {
         if self.xmit_slice >= 0 {
             let xmit_slice = self.xmit_slice as u32;
@@ -371,7 +335,7 @@ impl McastSender {
                 self.do_retransmissions();
                 return RUNNING;
             }
-            self.data_fifo.pop(slice.bytes as usize);
+            self.data_fifo.write().unwrap().pop(slice.bytes as usize);
             self.xmit_slice = -1;
             if getch(0) == Some('q') {
                 let _ = self.send_disconnect(self.socket.multicast_addr);
@@ -380,7 +344,7 @@ impl McastSender {
         }
 
         self.lastsendtime = Instant::now();
-        self.read();
+        // self.read();
 
         let slice = self.make_slice(self.blocksize as u32, self.slice_size);
         if slice.bytes == 0 {
@@ -468,10 +432,6 @@ impl McastSender {
                 _ => Err("Received an unexpected message."),
             },
             Err(ref err) if err.kind() == std::io::ErrorKind::TimedOut => {
-                return Ok(true);
-            }
-            Err(ref err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                self.read();
                 return Ok(true);
             }
             Err(_err) => return Err("Unexpected error!!"),

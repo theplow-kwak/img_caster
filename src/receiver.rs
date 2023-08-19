@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::io;
 use std::io::Write;
 use std::net::SocketAddrV4;
+use std::sync::{Arc, RwLock};
+use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::datafifo::DataFIFO;
@@ -15,8 +17,7 @@ use crate::*;
 
 pub struct McastReceiver {
     pub socket: MultiCast,
-    pub disk: Option<Disk>,
-    data_fifo: DataFIFO,
+    data_fifo: Arc<RwLock<DataFIFO>>,
     rcvbuf: u32,
     client_number: u32,
     block_size: u32,
@@ -30,18 +31,13 @@ pub struct McastReceiver {
 }
 
 impl McastReceiver {
-    pub fn new(nic: usize, filename: &str, rcvbuf: usize) -> Self {
+    pub fn new(nic: usize, rcvbuf: usize, data_fifo: Arc<RwLock<DataFIFO>>) -> Self {
         let socket = MultiCast::receiver(nic, rcvbuf);
         socket.join_multicast().unwrap();
 
-        let disk = Disk::open(filename.to_string(), 'w');
-        if let Some(ref d) = disk {
-            info!("{:?}", d);
-        }
-
         Self {
             socket,
-            disk,
+            data_fifo,
             client_number: 0,
             block_size: 0,
             rcvbuf: rcvbuf as u32,
@@ -49,7 +45,6 @@ impl McastReceiver {
             write_chunk: CHUNK_SIZE,
             transferstarted: false,
             slices: HashMap::new(),
-            data_fifo: DataFIFO::new(),
             start_time: Instant::now(),
             elaps_time: Instant::now(),
             written_elaps: 0,
@@ -143,13 +138,14 @@ impl McastReceiver {
 
     fn get_slice_mut(&mut self, slice_no: u32, bytes: u32) -> &mut Slice {
         if !self.slices.contains_key(&slice_no) {
+            let mut data_fifo = self.data_fifo.write().unwrap();
             self.slices.insert(
                 slice_no,
                 Slice::new(
                     slice_no,
                     bytes,
                     self.block_size,
-                    self.data_fifo.reserve(bytes),
+                    data_fifo.reserve(bytes),
                     self.max_slices,
                 ),
             );
@@ -160,13 +156,14 @@ impl McastReceiver {
 
     fn get_slice(&mut self, slice_no: u32, bytes: u32) -> &Slice {
         if !self.slices.contains_key(&slice_no) {
+            let mut data_fifo = self.data_fifo.write().unwrap();
             self.slices.insert(
                 slice_no,
                 Slice::new(
                     slice_no,
                     bytes,
                     self.block_size,
-                    self.data_fifo.reserve(bytes),
+                    data_fifo.reserve(bytes),
                     self.max_slices,
                 ),
             );
@@ -179,7 +176,8 @@ impl McastReceiver {
         let slice = self.get_slice_mut(msg.sliceno, msg.bytes);
         if slice.update_block(msg.blockno as u32) {
             let pos = slice.get_block_pos(msg.blockno as u32);
-            self.data_fifo.set(pos, &data);
+            let mut data_fifo = self.data_fifo.write().unwrap();
+            data_fifo.set(pos, &data);
         }
         RUNNING
     }
@@ -191,7 +189,7 @@ impl McastReceiver {
             if difftime.as_millis() == 0 {
                 return;
             }
-            let writtenbytes = self.data_fifo.written_bytes() as u128;
+            let writtenbytes = self.data_fifo.read().unwrap().written_bytes() as u128;
             let mbps = writtenbytes / difftime.as_millis();
             let mut embps = 0;
             if elapsed.as_millis() > 0 {
@@ -217,28 +215,12 @@ impl McastReceiver {
             println!("\n");
             info!(
                 "{} written in {:?}",
-                Byte::from_bytes(self.data_fifo.written_bytes() as u128)
+                Byte::from_bytes(self.data_fifo.read().unwrap().written_bytes() as u128)
                     .get_appropriate_unit(false)
                     .to_string(),
                 self.start_time.elapsed()
             );
         }
-    }
-
-    fn write(&mut self, size: u32) -> io::Result<()> {
-        let mut required: usize = self.data_fifo.len();
-        if size > 0 && ((required % self.write_chunk) != 0) {
-            required -= required % self.write_chunk;
-        }
-        if let Some(data) = self.data_fifo.pop(required) {
-            if let Some(ref mut disk) = self.disk {
-                let mut iter = data.chunks(self.write_chunk);
-                while let Some(data) = iter.next() {
-                    let _n = disk.write(&data)?;
-                }
-            }
-        }
-        Ok(())
     }
 
     fn process_reqack(&mut self, msg: &MsgReqAck, ready_set: Vec<u8>) -> bool {
@@ -247,24 +229,25 @@ impl McastReceiver {
         }
         let slice = self.get_slice(msg.sliceno, msg.bytes);
         if msg.rxmit == 0 && msg.bytes == 0 {
-            if let Err(err) = self.write(0) {
-                error!("Write error {:?}", err);
-                return ENDLOOP;
-            };
+            // if let Err(err) = self.write(0) {
+            //     error!("Write error {:?}", err);
+            //     return ENDLOOP;
+            // };
             let _ = self.send_ok(msg.sliceno);
             return ENDLOOP;
         }
         if slice.is_completed() {
-            if let Err(err) = self.write(msg.bytes) {
-                error!("Write error {:?}", err);
-                return ENDLOOP;
-            };
+            // if let Err(err) = self.write(msg.bytes) {
+            //     error!("Write error {:?}", err);
+            //     return ENDLOOP;
+            // };
             let _ = self.send_ok(msg.sliceno);
             self.display_progress(false);
         } else {
             let _ = self.send_retransmit(msg);
         }
         if getch(0) == Some('q') {
+            let _ = self.send_disconnect();
             return ENDLOOP;
         }
         RUNNING
@@ -286,13 +269,6 @@ impl McastReceiver {
                 _ => return Err("Received an unexpected message."),
             },
             Err(ref err) if err.kind() == std::io::ErrorKind::TimedOut => {
-                return Ok(RUNNING);
-            }
-            Err(ref err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                if let Err(err) = self.write(CHUNK_SIZE as u32) {
-                    error!("Write error {:?}", err);
-                    return Ok(ENDLOOP);
-                };
                 return Ok(RUNNING);
             }
             Err(_err) => return Err("Unexpected error!!"),

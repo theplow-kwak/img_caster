@@ -51,6 +51,7 @@ impl DataFIFO {
         self
     }
 
+    // reserve buffer for received data from server
     pub fn reserve(&mut self, size: u32) -> usize {
         let base = self.slicebase;
         let mut zvec = vec![0u8; size as usize];
@@ -61,6 +62,7 @@ impl DataFIFO {
         base
     }
 
+    // Allocate as slice to transfer data read from file
     pub fn assign(&mut self, size: u32) -> usize {
         let base = self.slicebase;
         self.slicebase += size as usize;
@@ -74,7 +76,7 @@ impl DataFIFO {
         self.startpoint
     }
 
-    pub fn is_empty(&mut self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.buffer.is_empty()
     }
 
@@ -83,8 +85,12 @@ impl DataFIFO {
         self
     }
 
-    pub fn len(&mut self) -> usize {
+    pub fn len(&self) -> usize {
         self.endpoint - self.startpoint
+    }
+
+    pub fn remain(&self) -> usize {
+        self.endpoint - self.slicebase
     }
 }
 
