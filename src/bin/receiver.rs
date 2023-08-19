@@ -55,14 +55,13 @@ fn write(disk: &mut Option<Disk>, data_fifo: Arc<RwLock<DataFIFO>>) -> bool {
         {
             let mut data_fifo = data_fifo.write().unwrap();
             let mut required: usize = data_fifo.len();
-            let size = data_fifo.slicebase - data_fifo.endpoint;
-            if data_fifo.startpoint != 0 && size == 0 && required == 0 {
+            if !data_fifo.close && ((required % WRITE_CHUNK) != 0) {
+                required -= required % WRITE_CHUNK;
+            }
+            if data_fifo.close && required == 0 {
                 return false;
             }
             if required > 0 {
-                if size > 0 && ((required % WRITE_CHUNK) != 0) {
-                    required -= required % WRITE_CHUNK;
-                }
                 if let Some(data) = data_fifo.pop(required) {
                     if let Some(ref mut disk) = disk {
                         let mut iter = data.chunks(WRITE_CHUNK);
@@ -157,5 +156,6 @@ fn main() {
         }
     }
     receiver.display_progress(true);
+    data_fifo.write().unwrap().close = true;
     let _ = disk_thread.join();
 }

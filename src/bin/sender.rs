@@ -81,6 +81,9 @@ fn read(disk: &mut Option<Disk>, data_fifo: Arc<RwLock<DataFIFO>>) -> bool {
                 }
             }
         }
+        if data_fifo.read().unwrap().close {
+            return false;
+        }
     }
 }
 
@@ -165,5 +168,6 @@ fn main() {
         }
     }
     sender.display_progress(true);
+    data_fifo.write().unwrap().close = true;
     let _ = disk_thread.join();
 }

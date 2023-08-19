@@ -6,6 +6,7 @@ pub struct DataFIFO {
     pub slicebase: usize,
     pub startpoint: usize,
     pub endpoint: usize,
+    pub close: bool,
 }
 
 impl DataFIFO {
@@ -15,6 +16,7 @@ impl DataFIFO {
             slicebase: 0,
             startpoint: 0,
             endpoint: 0,
+            close: false,
         }
     }
 
