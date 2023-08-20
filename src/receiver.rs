@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::io;
 use std::io::Write;
 use std::net::SocketAddrV4;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::Instant;
 
 use crate::datafifo::DataFIFO;
 use crate::disk::Disk;

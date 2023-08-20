@@ -5,7 +5,6 @@ use std::io;
 use std::io::{Error, ErrorKind};
 use std::io::{Read, Write};
 use std::net::SocketAddrV4;
-use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::bitarray::BitArray;

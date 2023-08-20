@@ -120,7 +120,13 @@ pub struct MsgConnectReply {
 }
 
 impl MsgConnectReply {
-    pub fn new(clnr: u32, blocksize: u32, capabilities: u32, max_slices: u32, mcastaddr: &Ipv4Addr) -> Self {
+    pub fn new(
+        clnr: u32,
+        blocksize: u32,
+        capabilities: u32,
+        max_slices: u32,
+        mcastaddr: &Ipv4Addr,
+    ) -> Self {
         let mut buf = [0; 16];
         buf[0..4].copy_from_slice(&mcastaddr.octets());
         Self {

@@ -1,27 +1,23 @@
 use log::{debug, error, info, trace, warn};
 use std::io;
-use winapi::um::{
-    errhandlingapi::GetLastError,
-    winioctl::{DISK_GEOMETRY_EX, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX},
+use winapi::{
+    ctypes::c_void,
+    shared::ntdef::LARGE_INTEGER,
+    um::{
+        errhandlingapi::GetLastError,
+        fileapi::{self as fs, CREATE_ALWAYS, OPEN_EXISTING},
+        handleapi::INVALID_HANDLE_VALUE,
+        ioapiset::DeviceIoControl,
+        winbase::{FILE_FLAG_NO_BUFFERING, FILE_FLAG_WRITE_THROUGH},
+        winioctl::{DISK_GEOMETRY_EX, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX},
+        winnt::{FILE_SHARE_READ, FILE_SHARE_WRITE, GENERIC_READ, GENERIC_WRITE, HANDLE},
+    },
 };
 
 use std::{
     io::{Read, Write},
     mem::size_of,
     ptr::null_mut,
-};
-
-use winapi::{
-    ctypes::c_void,
-    shared::ntdef::LARGE_INTEGER,
-    um::{
-        fileapi::{self as fs, CREATE_ALWAYS, OPEN_EXISTING},
-        handleapi::INVALID_HANDLE_VALUE,
-        ioapiset::DeviceIoControl,
-        winbase::{FILE_FLAG_NO_BUFFERING, FILE_FLAG_WRITE_THROUGH},
-        winioctl::{DISK_GEOMETRY, IOCTL_DISK_GET_DRIVE_GEOMETRY},
-        winnt::{FILE_SHARE_READ, FILE_SHARE_WRITE, GENERIC_READ, GENERIC_WRITE, HANDLE},
-    },
 };
 
 use crate::SECTOR_SIZE;
