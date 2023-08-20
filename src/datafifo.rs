@@ -60,7 +60,12 @@ impl DataFIFO {
         self.buffer.append(&mut zvec);
         self.slicebase += size as usize;
         self.endpoint = base;
-        trace!("reserve {size}: start {} - end {} - slice {}", self.startpoint, self.endpoint, self.slicebase);
+        trace!(
+            "reserve {size}: start {} - end {} - slice {}",
+            self.startpoint,
+            self.endpoint,
+            self.slicebase
+        );
         base
     }
 

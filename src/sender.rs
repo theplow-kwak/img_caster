@@ -3,15 +3,13 @@ use log::{debug, error, info, trace, warn};
 use std::collections::HashMap;
 use std::io;
 use std::io::{Error, ErrorKind};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::SocketAddrV4;
 use std::sync::{Arc, RwLock};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::bitarray::BitArray;
 use crate::datafifo::DataFIFO;
-use crate::disk::Disk;
 use crate::multicast::*;
 use crate::packet::*;
 use crate::slice::Slice;

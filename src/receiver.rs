@@ -5,11 +5,9 @@ use std::io;
 use std::io::Write;
 use std::net::SocketAddrV4;
 use std::sync::{Arc, RwLock};
-use std::thread;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::Instant;
 
 use crate::datafifo::DataFIFO;
-use crate::disk::Disk;
 use crate::multicast::*;
 use crate::packet::*;
 use crate::slice::Slice;

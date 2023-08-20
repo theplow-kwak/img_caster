@@ -3,7 +3,7 @@ use clap::Parser;
 use log::{debug, error, info, trace, warn, LevelFilter};
 use simplelog::*;
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::thread;

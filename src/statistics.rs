@@ -148,5 +148,4 @@ impl Statistics {
     pub fn start(&mut self) {
         self.start_time = Instant::now()
     }
-
 }
