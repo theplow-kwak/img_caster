@@ -3,14 +3,9 @@ use clap::Parser;
 use log::{debug, error, info, trace, warn, LevelFilter};
 use simplelog::*;
 use std::fs::File;
-use std::io::{Read, Write};
 use std::str::FromStr;
-use std::sync::{Arc, RwLock};
-use std::thread;
 use std::time::Duration;
 
-use img_caster::datafifo::DataFIFO;
-use img_caster::disk::Disk;
 use img_caster::sender::McastSender;
 
 #[derive(Parser, Default, Debug, Clone)]
@@ -100,19 +95,6 @@ fn main() {
     if let Some(size) = args.size {
         transfer_size = Byte::from_str(size).unwrap().get_bytes() as usize;
     }
-
-    // Open file
-    // let mut disk = Disk::open(filename.to_string(), 'r');
-    // if let Some(ref mut disk) = disk {
-    //     if transfer_size > 0 {
-    //         disk.size = transfer_size;
-    //     }
-    //     info!("{:?}", disk);
-    // }
-
-    let data_fifo = Arc::new(RwLock::new(DataFIFO::new()));
-    let data_fifo_thread = Arc::clone(&data_fifo);
-    let data_fifo_socket = Arc::clone(&data_fifo);
 
     // Open Network socket sender
     let mut sender = McastSender::new(
