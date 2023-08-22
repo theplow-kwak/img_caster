@@ -5,7 +5,7 @@ use simplelog::*;
 use std::fs::File;
 use std::io::Write;
 use std::str::FromStr;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -50,10 +50,10 @@ struct Args {
     loglevel: Option<String>,
 }
 
-fn write(disk: &mut Option<Disk>, data_fifo: Arc<RwLock<DataFIFO>>, write_chunk: usize) -> bool {
+fn write(disk: &mut Option<Disk>, data_fifo: Arc<Mutex<DataFIFO>>, write_chunk: usize) -> bool {
     loop {
         // {
-        let mut data_fifo = data_fifo.write().unwrap();
+        let mut data_fifo = data_fifo.lock().unwrap();
         let mut required: usize = data_fifo.len();
         if !data_fifo.close && ((required % write_chunk) != 0) {
             required -= required % write_chunk;
@@ -122,7 +122,7 @@ fn main() {
         write_chunk = Byte::from_str(chunk).unwrap().get_bytes() as usize * SECTOR_SIZE;
     }
 
-    let data_fifo = Arc::new(RwLock::new(DataFIFO::new()));
+    let data_fifo = Arc::new(Mutex::new(DataFIFO::new()));
     let data_fifo_thread = Arc::clone(&data_fifo);
     let data_fifo_socket = Arc::clone(&data_fifo);
 
@@ -157,6 +157,6 @@ fn main() {
         }
     }
     receiver.display_progress(true);
-    data_fifo.write().unwrap().close = true;
+    data_fifo.lock().unwrap().close = true;
     let _ = disk_thread.join();
 }
