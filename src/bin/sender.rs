@@ -68,16 +68,20 @@ fn read(disk: &mut Option<Disk>, data_fifo: Arc<RwLock<DataFIFO>>) -> bool {
         if (required % READ_CHUNK) != 0 {
             required -= required % READ_CHUNK;
         }
-        if let Some(ref mut disk) = disk {
-            if data_fifo.read().unwrap().endpoint >= disk.size {
-                info!("read end");
-                return false;
-            }
-            let mut buff = Box::new(vec![0u8; required]);
-            if let Ok(size) = disk.read(&mut buff) {
-                trace!("read {size} bytes");
-                if size > 0 {
-                    data_fifo.write().unwrap().push(&mut buff[..size]);
+        if required > 0 {
+            if let Some(ref mut disk) = disk {
+                if data_fifo.read().unwrap().endpoint >= disk.size {
+                    data_fifo.write().unwrap().close = true;
+                    info!("read end");
+                    return false;
+                }
+                // println!("required: {required}");
+                let mut buff = Box::new(vec![0u8; required]);
+                if let Ok(size) = disk.read(&mut buff) {
+                    trace!("read {size} bytes");
+                    if size > 0 {
+                        data_fifo.write().unwrap().push(&mut buff[..size]);
+                    }
                 }
             }
         }

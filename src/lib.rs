@@ -16,8 +16,8 @@ pub const ENDLOOP: bool = false;
 pub const SECTOR_SIZE: usize = 512;
 pub const CHUNK_SIZE: usize = SECTOR_SIZE * 512;
 pub const READ_CHUNK: usize = CHUNK_SIZE * 16;
-pub const WRITE_CHUNK: usize = CHUNK_SIZE * 16;
-pub const MAX_BUFFER_SIZE: usize = CHUNK_SIZE * 32;
+pub const WRITE_CHUNK: usize = CHUNK_SIZE;
+pub const MAX_BUFFER_SIZE: usize = CHUNK_SIZE * 128;
 
 pub const BLOCK_SIZE: u32 = 512 * 3;
 pub const UDP_PACK_SIZE: usize = 2048;

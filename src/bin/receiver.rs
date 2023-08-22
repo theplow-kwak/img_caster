@@ -50,29 +50,29 @@ struct Args {
     loglevel: Option<String>,
 }
 
-fn write(disk: &mut Option<Disk>, data_fifo: Arc<RwLock<DataFIFO>>) -> bool {
+fn write(disk: &mut Option<Disk>, data_fifo: Arc<RwLock<DataFIFO>>, write_chunk: usize) -> bool {
     loop {
-        {
-            let mut data_fifo = data_fifo.write().unwrap();
-            let mut required: usize = data_fifo.len();
-            if !data_fifo.close && ((required % WRITE_CHUNK) != 0) {
-                required -= required % WRITE_CHUNK;
-            }
-            if data_fifo.close && required == 0 {
-                return false;
-            }
-            if required > 0 {
-                if let Some(data) = data_fifo.pop(required) {
-                    if let Some(ref mut disk) = disk {
-                        let mut iter = data.chunks(WRITE_CHUNK);
-                        while let Some(data) = iter.next() {
-                            let _n = disk.write(&data);
-                        }
+        // {
+        let mut data_fifo = data_fifo.write().unwrap();
+        let mut required: usize = data_fifo.len();
+        if !data_fifo.close && ((required % write_chunk) != 0) {
+            required -= required % write_chunk;
+        }
+        if required > 0 {
+            if let Some(data) = data_fifo.pop(required) {
+                if let Some(ref mut disk) = disk {
+                    let mut iter = data.chunks(write_chunk);
+                    while let Some(data) = iter.next() {
+                        let _n = disk.write(&data);
                     }
                 }
             }
         }
-        thread::sleep(Duration::from_nanos(10));
+        if data_fifo.close {
+            return false;
+        }
+        // }
+        // thread::sleep(Duration::from_nanos(10));
     }
 }
 
@@ -117,6 +117,11 @@ fn main() {
         info!("{:?}", d);
     }
 
+    let mut write_chunk = WRITE_CHUNK;
+    if let Some(chunk) = args.chunk {
+        write_chunk = Byte::from_str(chunk).unwrap().get_bytes() as usize * SECTOR_SIZE;
+    }
+
     let data_fifo = Arc::new(RwLock::new(DataFIFO::new()));
     let data_fifo_thread = Arc::clone(&data_fifo);
     let data_fifo_socket = Arc::clone(&data_fifo);
@@ -126,14 +131,10 @@ fn main() {
         receiver::McastReceiver::new(args.nic.unwrap_or(0), rcvbuf, data_fifo_socket);
 
     let disk_thread = thread::spawn(move || {
-        write(&mut disk, data_fifo_thread);
+        write(&mut disk, data_fifo_thread, write_chunk);
     });
 
     let _ = receiver.enumerate();
-
-    if let Some(chunk) = args.chunk {
-        receiver.write_chunk = Byte::from_str(chunk).unwrap().get_bytes() as usize * SECTOR_SIZE;
-    }
 
     println!("\nPress 'Enter' to start receiving data!\n");
 

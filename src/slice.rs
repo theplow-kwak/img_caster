@@ -56,8 +56,11 @@ impl Slice {
     }
 
     pub fn is_completed(&self) -> bool {
-        // self.duration = time.time();
         self.blocks_in_slice == self.blocks_transferred
+    }
+
+    pub fn get_pos(&mut self, block_no: u32) -> usize {
+        (self.block_size * block_no) as usize
     }
 }
 

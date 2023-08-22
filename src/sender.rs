@@ -251,23 +251,29 @@ impl McastSender {
 
     fn make_slice(&mut self, block_size: u32, slice_size: u32) -> &mut Slice {
         let mut slice_size = slice_size;
-        let remain = self.data_fifo.read().unwrap().remain();
+        let mut remain = 0;
+        loop {
+            remain = self.data_fifo.read().unwrap().remain();
+            if self.data_fifo.read().unwrap().close || remain > 0 {
+                break;
+            }
+        }
         if block_size as u32 * slice_size > remain as u32 {
             slice_size = remain as u32 / block_size;
         }
-        let mut size = block_size * slice_size;
-        if size == 0 {
-            size = remain as u32;
+        let mut bytes = block_size * slice_size;
+        if bytes == 0 {
+            bytes = remain as u32;
         }
         let slice_no = self.slices.len() as u32;
         let slice = Slice::new(
             slice_no,
-            size,
+            bytes,
             block_size,
             self.data_fifo.read().unwrap().slicebase,
             self.max_slices,
         );
-        self.data_fifo.write().unwrap().assign(size);
+        self.data_fifo.write().unwrap().assign(bytes);
         self.slices.insert(slice_no, slice);
         self.xmit_slice = slice_no as i32;
         let slice = self.slices.get_mut(&slice_no).unwrap();

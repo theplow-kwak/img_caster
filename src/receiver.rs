@@ -26,6 +26,7 @@ pub struct McastReceiver {
     start_time: Instant,
     elaps_time: Instant,
     written_elaps: u128,
+    buffer: Box<Vec<u8>>,
 }
 
 impl McastReceiver {
@@ -46,6 +47,7 @@ impl McastReceiver {
             start_time: Instant::now(),
             elaps_time: Instant::now(),
             written_elaps: 0,
+            buffer: Box::new(vec![0u8; 512 * 3 * 8192]),
         }
     }
 
@@ -173,9 +175,11 @@ impl McastReceiver {
     fn process_datablock(&mut self, msg: &DataBlock, data: Vec<u8>) -> bool {
         let slice = self.get_slice_mut(msg.sliceno, msg.bytes);
         if slice.update_block(msg.blockno as u32) {
-            let pos = slice.get_block_pos(msg.blockno as u32);
-            let mut data_fifo = self.data_fifo.write().unwrap();
-            data_fifo.set(pos, &data);
+            let pos = slice.get_pos(msg.blockno as u32);
+            let end = pos + data.len();
+            self.buffer.splice(pos..end, data);
+            // let mut data_fifo = self.data_fifo.write().unwrap();
+            // data_fifo.set(pos, &data);
         }
         RUNNING
     }
