@@ -4,8 +4,9 @@ use std::collections::HashMap;
 use std::io;
 use std::io::Write;
 use std::net::SocketAddrV4;
-use std::sync::{Arc, RwLock, Mutex};
-use std::time::Instant;
+use std::sync::{Arc, Mutex, RwLock};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::datafifo::DataFIFO;
 use crate::multicast::*;
@@ -15,7 +16,7 @@ use crate::*;
 
 pub struct McastReceiver {
     pub socket: MultiCast,
-    data_fifo: Arc<Mutex<DataFIFO>>,
+    data_fifo: Arc<RwLock<DataFIFO>>,
     rcvbuf: u32,
     client_number: u32,
     block_size: u32,
@@ -30,7 +31,7 @@ pub struct McastReceiver {
 }
 
 impl McastReceiver {
-    pub fn new(nic: usize, rcvbuf: usize, data_fifo: Arc<Mutex<DataFIFO>>) -> Self {
+    pub fn new(nic: usize, rcvbuf: usize, data_fifo: Arc<RwLock<DataFIFO>>) -> Self {
         let socket = MultiCast::receiver(nic, rcvbuf);
         socket.join_multicast().unwrap();
 
@@ -138,16 +139,13 @@ impl McastReceiver {
 
     fn get_slice_mut(&mut self, slice_no: u32, bytes: u32) -> &mut Slice {
         if !self.slices.contains_key(&slice_no) {
-            let mut data_fifo = self.data_fifo.lock().unwrap();
+            while self.data_fifo.read().unwrap().len() > MAX_BUFFER_SIZE * 10 {
+                thread::sleep(Duration::from_micros(500));
+            }
+            let base = self.data_fifo.write().unwrap().reserve(bytes);
             self.slices.insert(
                 slice_no,
-                Slice::new(
-                    slice_no,
-                    bytes,
-                    self.block_size,
-                    data_fifo.reserve(bytes),
-                    self.max_slices,
-                ),
+                Slice::new(slice_no, bytes, self.block_size, base, self.max_slices),
             );
         }
         let slice = self.slices.get_mut(&slice_no).unwrap();
@@ -156,16 +154,13 @@ impl McastReceiver {
 
     fn get_slice(&mut self, slice_no: u32, bytes: u32) -> &Slice {
         if !self.slices.contains_key(&slice_no) {
-            let mut data_fifo = self.data_fifo.lock().unwrap();
+            while self.data_fifo.read().unwrap().len() > MAX_BUFFER_SIZE * 10 {
+                thread::sleep(Duration::from_micros(500));
+            }
+            let base = self.data_fifo.write().unwrap().reserve(bytes);
             self.slices.insert(
                 slice_no,
-                Slice::new(
-                    slice_no,
-                    bytes,
-                    self.block_size,
-                    data_fifo.reserve(bytes),
-                    self.max_slices,
-                ),
+                Slice::new(slice_no, bytes, self.block_size, base, self.max_slices),
             );
         }
         let slice = self.slices.get(&slice_no).unwrap();
@@ -176,10 +171,7 @@ impl McastReceiver {
         let slice = self.get_slice_mut(msg.sliceno, msg.bytes);
         if slice.update_block(msg.blockno as u32) {
             let pos = slice.get_block_pos(msg.blockno as u32);
-            // let end = pos + data.len();
-            // self.buffer.splice(pos..end, data);
-            let mut data_fifo = self.data_fifo.lock().unwrap();
-            data_fifo.set(pos, &data);
+            self.data_fifo.write().unwrap().set(pos, &data);
         }
         RUNNING
     }
@@ -191,7 +183,7 @@ impl McastReceiver {
             if difftime.as_millis() == 0 {
                 return;
             }
-            let writtenbytes = self.data_fifo.lock().unwrap().written_bytes() as u128;
+            let writtenbytes = self.data_fifo.read().unwrap().written_bytes() as u128;
             let mbps = writtenbytes / difftime.as_millis();
             let mut embps = 0;
             if elapsed.as_millis() > 0 {
@@ -217,7 +209,7 @@ impl McastReceiver {
             println!("\n");
             info!(
                 "{} written in {:?}",
-                Byte::from_bytes(self.data_fifo.lock().unwrap().written_bytes() as u128)
+                Byte::from_bytes(self.data_fifo.read().unwrap().written_bytes() as u128)
                     .get_appropriate_unit(false)
                     .to_string(),
                 self.start_time.elapsed()
@@ -229,23 +221,20 @@ impl McastReceiver {
         if (ready_set[self.client_number as usize] & (1 << self.client_number)) != 0 {
             return RUNNING;
         }
+        debug!("process_reqack ");
+        let elapse = Instant::now();
         let slice = self.get_slice(msg.sliceno, msg.bytes);
+        debug!("get slice : {:?}", elapse.elapsed());
         if msg.rxmit == 0 && msg.bytes == 0 {
-            // if let Err(err) = self.write(0) {
-            //     error!("Write error {:?}", err);
-            //     return ENDLOOP;
-            // };
             let _ = self.send_ok(msg.sliceno);
             return ENDLOOP;
         }
         if slice.is_completed() {
-            // if let Err(err) = self.write(msg.bytes) {
-            //     error!("Write error {:?}", err);
-            //     return ENDLOOP;
-            // };
+            debug!("slice.is_completed ");
             let _ = self.send_ok(msg.sliceno);
             self.display_progress(false);
         } else {
+            debug!("send_retransmit ");
             let _ = self.send_retransmit(msg);
         }
         if getch(0) == Some('q') {

@@ -318,7 +318,7 @@ impl McastSender {
             let xmit_slice = self.xmit_slice as u32;
             let slice = self.slices.get_mut(&xmit_slice).unwrap();
             if slice.nr_answered < self.clientlist.len() as u32 {
-                if self.lastsendtime.elapsed().as_secs() > 0 {
+                if self.lastsendtime.elapsed().as_micros() > 1 {
                     warn!(
                         "Waiting for response from clients {}/{} {}",
                         slice.nr_answered,
