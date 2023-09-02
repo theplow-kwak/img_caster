@@ -27,7 +27,6 @@ pub struct McastReceiver {
     start_time: Instant,
     elaps_time: Instant,
     written_elaps: u128,
-    buffer: Box<Vec<u8>>,
 }
 
 impl McastReceiver {
@@ -48,7 +47,6 @@ impl McastReceiver {
             start_time: Instant::now(),
             elaps_time: Instant::now(),
             written_elaps: 0,
-            buffer: Box::new(vec![0u8; 512 * 3 * 8192]),
         }
     }
 
@@ -129,7 +127,7 @@ impl McastReceiver {
 
     pub fn send_retransmit(&mut self, msg: &MsgReqAck) -> io::Result<usize> {
         warn!("handle {:?}: {}", msg, msg.rxmit);
-        let slice = self.get_slice_mut(msg.sliceno, msg.bytes);
+        let slice = self.get_slice(msg.sliceno, msg.bytes);
         let mut map = slice.retransmit.map.bits();
         let mut buffer =
             Message::CmdRetransmit(MsgRetransmit::new(msg.sliceno, msg.rxmit)).encode();
@@ -137,7 +135,7 @@ impl McastReceiver {
         self.socket.send_msg(&buffer)
     }
 
-    fn get_slice_mut(&mut self, slice_no: u32, bytes: u32) -> &mut Slice {
+    fn get_slice(&mut self, slice_no: u32, bytes: u32) -> &mut Slice {
         if !self.slices.contains_key(&slice_no) {
             while self.data_fifo.read().unwrap().len() > MAX_BUFFER_SIZE * 10 {
                 thread::sleep(Duration::from_micros(500));
@@ -152,23 +150,8 @@ impl McastReceiver {
         return slice;
     }
 
-    fn get_slice(&mut self, slice_no: u32, bytes: u32) -> &Slice {
-        if !self.slices.contains_key(&slice_no) {
-            while self.data_fifo.read().unwrap().len() > MAX_BUFFER_SIZE * 10 {
-                thread::sleep(Duration::from_micros(500));
-            }
-            let base = self.data_fifo.write().unwrap().reserve(bytes);
-            self.slices.insert(
-                slice_no,
-                Slice::new(slice_no, bytes, self.block_size, base, self.max_slices),
-            );
-        }
-        let slice = self.slices.get(&slice_no).unwrap();
-        return slice;
-    }
-
     fn process_datablock(&mut self, msg: &DataBlock, data: Vec<u8>) -> bool {
-        let slice = self.get_slice_mut(msg.sliceno, msg.bytes);
+        let slice = self.get_slice(msg.sliceno, msg.bytes);
         if slice.update_block(msg.blockno as u32) {
             let pos = slice.get_block_pos(msg.blockno as u32);
             self.data_fifo.write().unwrap().set(pos, &data);
@@ -231,6 +214,7 @@ impl McastReceiver {
         }
         if slice.is_completed() {
             debug!("slice.is_completed ");
+            slice.close();
             let _ = self.send_ok(msg.sliceno);
             self.display_progress(false);
         } else {

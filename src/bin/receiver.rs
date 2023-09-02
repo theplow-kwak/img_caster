@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use img_caster::datafifo::DataFIFO;
 use img_caster::disk::Disk;
-use img_caster::receiver;
+use img_caster::receiver::McastReceiver;
 use img_caster::*;
 
 #[derive(Parser, Default, Debug)]
@@ -50,23 +50,22 @@ struct Args {
     loglevel: Option<String>,
 }
 
-fn write(disk: &mut Option<Disk>, data_fifo: Arc<RwLock<DataFIFO>>, write_chunk: usize) -> bool {
+fn write(disk: &mut Option<Disk>, data_fifo: &Arc<RwLock<DataFIFO>>, write_chunk: usize) -> bool {
     loop {
-        // {
         let mut required = 0;
         {
             required = data_fifo.read().unwrap().len();
         }
-        if !data_fifo.read().unwrap().close && ((required % write_chunk) != 0) {
+        if !data_fifo.read().unwrap().is_closed() && ((required % write_chunk) != 0) {
             required -= required % write_chunk;
+        }
+        if required > MAX_BUFFER_SIZE {
+            required = MAX_BUFFER_SIZE;
         }
         if required > 0 {
             let elapse = Instant::now();
             debug!(" 1 -> required: {required}");
-            let mut data: Option<Vec<u8>> = None;
-            {
-                data = data_fifo.write().unwrap().pop(required);
-            }
+            let data = data_fifo.write().unwrap().pop(required);
             if let Some(data) = data {
                 debug!("    data : {}, {:?}", data.len(), elapse.elapsed());
                 if let Some(ref mut disk) = disk {
@@ -74,24 +73,19 @@ fn write(disk: &mut Option<Disk>, data_fifo: Arc<RwLock<DataFIFO>>, write_chunk:
                     debug!("    iter : ");
                     while let Some(data) = iter.next() {
                         let _n = disk.write(&data);
-                        // debug!("    n : {:?}", _n);
                     }
                 }
             }
             debug!(" <- required: {:?}", elapse.elapsed());
-        } else {
-            thread::sleep(Duration::from_micros(500));
         }
-        if data_fifo.read().unwrap().close {
-            return false;
+        if data_fifo.read().unwrap().is_closed() {
+            return true;
         }
-        // }
-        // thread::sleep(Duration::from_nanos(10));
     }
 }
 
+// initialize logger
 fn init_logger(args: &Args) {
-    // initialize logger
     let loglevel = args.loglevel.as_ref().unwrap();
     let termlog = TermLogger::new(
         LevelFilter::from_str(&loglevel).unwrap(),
@@ -141,12 +135,8 @@ fn main() {
     let data_fifo_socket = Arc::clone(&data_fifo);
 
     let rcvbuf = Byte::from_str(args.rcvbuf.unwrap()).unwrap().get_bytes() as usize;
-    let mut receiver =
-        receiver::McastReceiver::new(args.nic.unwrap_or(0), rcvbuf, data_fifo_socket);
-
-    let disk_thread = thread::spawn(move || {
-        write(&mut disk, data_fifo_thread, write_chunk);
-    });
+    let mut receiver = McastReceiver::new(args.nic.unwrap_or(0), rcvbuf, data_fifo_socket);
+    let disk_thread = thread::spawn(move || write(&mut disk, &data_fifo_thread, write_chunk));
 
     let _ = receiver.enumerate();
 
@@ -171,6 +161,6 @@ fn main() {
         }
     }
     receiver.display_progress(true);
-    data_fifo.write().unwrap().close = true;
+    data_fifo.write().unwrap().close();
     let _ = disk_thread.join();
 }

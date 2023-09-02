@@ -3,7 +3,7 @@ use crate::packet::*;
 use crate::*;
 
 use core::fmt;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub struct Slice {
     pub slice_no: u32,
@@ -19,7 +19,8 @@ pub struct Slice {
     pub need_rxmit: bool,
     pub nr_answered: u32,
     pub last_good_block: u32,
-    pub duration: Duration,
+    pub start_time: Instant,
+    pub latency: Duration,
 }
 
 impl Slice {
@@ -38,7 +39,8 @@ impl Slice {
             need_rxmit: false,
             nr_answered: 0,
             last_good_block: 0,
-            duration: Duration::new(0, 0),
+            start_time: Instant::now(),
+            latency: Duration::new(0, 0),
         }
     }
 
@@ -61,6 +63,11 @@ impl Slice {
 
     pub fn get_pos(&mut self, block_no: u32) -> usize {
         (self.block_size * block_no) as usize
+    }
+
+    pub fn close(&mut self) -> &mut Self {
+        self.latency = self.start_time.elapsed();
+        self
     }
 }
 

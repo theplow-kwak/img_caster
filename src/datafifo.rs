@@ -99,6 +99,15 @@ impl DataFIFO {
     pub fn remain(&self) -> usize {
         self.endpoint - self.slicebase
     }
+
+    pub fn close(&mut self) -> &mut Self {
+        self.close = true;
+        self
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.close
+    }
 }
 
 impl fmt::Debug for DataFIFO {

@@ -1,119 +1,58 @@
-use clap::Parser;
-use std::fs::File;
-use std::io::{Read, Result};
-use std::net::{SocketAddr, UdpSocket};
-use std::sync::mpsc;
-use std::sync::{Arc, Mutex, RwLock};
-use std::thread;
+use plotly::charts::{Layout, RgbColor, Line, Color, Dim, Marker, Mode, Scatter, Title, Axis};
+use plotly::Plot;
 
-#[derive(Parser, Default, Debug)]
-#[clap(author, version, about)]
-/// Sender for Multicast File Transfer
-struct Args {
-    /// File name to transmit data.
-    #[clap(short, long, value_name = "FILE")]
-    filepath: Option<String>,
+fn colored_and_styled_scatter_plot() {
+    let trace1 = Scatter::new(vec![52698, 43117], vec![53, 31])
+        .mode(Mode::Markers)
+        .name("North America")
+        .text(vec!["United States".to_owned(), "Canada".to_owned()])
+        .marker(Marker::new()
+            .color(Dim::Scalar(Color::Rgb(RgbColor::new(164, 194, 244))))
+            .size(Dim::Scalar(12))
+            .line(Line::new().color(Color::White).width(0.5)));
+    let trace2 = Scatter::new(vec![39317, 37236, 35650, 30066, 29570, 27159, 23557, 21046, 18007],
+                              vec![33, 20, 13, 19, 27, 19, 49, 44, 38])
+        .mode(Mode::Markers)
+        .name("Europe")
+        .text(vec!["Germany".to_owned(), "Britain".to_owned(), "France".to_owned(), "Spain".to_owned(),
+                   "Italy".to_owned(), "Czech Rep.".to_owned(), "Greece".to_owned(), "Poland".to_owned()])
+        .marker(Marker::new()
+            .color(Dim::Scalar(Color::Rgb(RgbColor::new(255, 217, 102))))
+            .size(Dim::Scalar(12)));
+    let trace3 = Scatter::new(vec![42952, 37037, 33106, 17478, 9813, 5253, 4692, 3899],
+                              vec![23, 42, 54, 89, 14, 99, 93, 70])
+        .mode(Mode::Markers)
+        .name("Asia/Pacific")
+        .text(vec!["Australia".to_owned(), "Japan".to_owned(),
+                   "South Korea".to_owned(), "Malaysia".to_owned(),
+                   "China".to_owned(), "Indonesia".to_owned(), "Philippines".to_owned(), "India".to_owned()])
+        .marker(Marker::new()
+            .color(Dim::Scalar(Color::Rgb(RgbColor::new(234, 153, 153))))
+            .size(Dim::Scalar(12)));
+    let trace4 = Scatter::new(vec![19097, 18601, 15595, 13546, 12026, 7434, 5419],
+                              vec![43, 47, 56, 80, 86, 93, 80])
+        .mode(Mode::Markers)
+        .name("Latin America")
+        .text(vec!["Chile".to_owned(), "Argentina".to_owned(), "Mexico".to_owned(),
+                   "Venezuela".to_owned(), "Venezuela".to_owned(), "El Salvador".to_owned(), "Bolivia".to_owned()])
+        .marker(Marker::new()
+            .color(Dim::Scalar(Color::Rgb(RgbColor::new(142, 124, 195))))
+            .size(Dim::Scalar(12)));
 
-    /// PhysicalDrive number. ex) 1 -> "\\.\PhysicalDrive1"
-    #[clap(short, long)]
-    driveno: Option<u8>,
+    let layout = Layout::new()
+        .title(Title::new("Quarter 1 Growth"))
+        .xaxis(Axis::new().title(Title::new("GDP per Capita")).show_grid(false).zero_line(false))
+        .yaxis(Axis::new().title(Title::new("Percent")).show_line(false));
+    let mut plot = Plot::new();
+    plot.add_trace(trace1);
+    plot.add_trace(trace2);
+    plot.add_trace(trace3);
+    plot.add_trace(trace4);
+    plot.add_layout(layout);
+    plot.show();
 }
 
-#[derive(Default, Debug)]
-struct MyStruct {
-    data: Box<Vec<u8>>,
-    start: usize,
-    end: usize,
-    index: usize,
-}
-
-fn main() {
-    let my_struct = MyStruct {
-        data: Box::new(Vec::new()),
-        start: 0,
-        end: 0,
-        index: 0,
-    };
-
-    let shared_data = Arc::new(RwLock::new(my_struct));
-
-    let thread_shared_data = Arc::clone(&shared_data);
-    let sub_thread = thread::spawn(move || {
-        // Access the shared data in the sub-thread
-        let mut data = thread_shared_data.write().unwrap();
-        data.start = 100;
-        data.end = 200;
-    });
-
-    // Access the shared data in the main thread
-    let mut data = shared_data.write().unwrap();
-    data.index = 42;
-
-    // Wait for the sub-thread to finish
-    sub_thread.join().unwrap();
-
-    // Access and print modified data
-    println!("start: {}, end: {}, index: {}", data.start, data.end, data.index);
-}
-
-fn read_and_send(mut file: &File, tx: mpsc::Sender<Vec<u8>>) {
-    let mut buffer = [0; 1024];
-    loop {
-        match file.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(bytes_read) => {
-                let data = buffer[..bytes_read].to_vec();
-                println!("read data: {} {:?}", data.len(), &data[..10]);
-                if tx.send(data).is_err() {
-                    eprintln!("Error sending data to sender thread");
-                    break;
-                }
-            }
-            Err(e) => {
-                eprintln!("Error reading file: {:?}", e);
-                break;
-            }
-        }
-    }
-}
-
-fn udp_sender(socket: UdpSocket, rx: mpsc::Receiver<Vec<u8>>) {
-    let dest_addr: SocketAddr = "127.0.0.1:54321".parse().unwrap();
-    while let Ok(data) = rx.recv() {
-        println!("send data: {} {:?}", data.len(), &data[..10]);
-        if let Err(e) = socket.send_to(&data, dest_addr) {
-            eprintln!("Error sending data: {:?}", e);
-            break;
-        }
-    }
-}
-
-pub fn get_interfaces() {
-    let interfaces = default_net::get_interfaces();
-    for interface in interfaces {
-        println!("Interface");
-        println!("\tIndex: {}", interface.index);
-        println!("\tName: {}", interface.name);
-        println!("\tFriendly Name: {:?}", interface.friendly_name);
-        println!("\tDescription: {:?}", interface.description);
-        println!("\tType: {}", interface.if_type.name());
-        if let Some(mac_addr) = interface.mac_addr {
-            println!("\tMAC: {}", mac_addr);
-        } else {
-            println!("\tMAC: (Failed to get mac address)");
-        }
-        println!("\tIPv4: {:?}", interface.ipv4);
-        println!("\tIPv6: {:?}", interface.ipv6);
-        println!("\tFlags: {:?}", interface.flags);
-        println!("\tTransmit Speed: {:?}", interface.transmit_speed);
-        println!("\tReceive Speed: {:?}", interface.receive_speed);
-        if let Some(gateway) = interface.gateway {
-            println!("Gateway");
-            println!("\tMAC: {}", gateway.mac_addr);
-            println!("\tIP: {}", gateway.ip_addr);
-        } else {
-            println!("Gateway: (Not found)");
-        }
-        println!();
-    }
+fn main() -> std::io::Result<()> {
+    colored_and_styled_scatter_plot();
+    Ok(())
 }

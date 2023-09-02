@@ -2,8 +2,8 @@ use byte_unit::Byte;
 use log::{debug, error, info, trace, warn};
 use std::collections::HashMap;
 use std::io;
-use std::io::{Error, ErrorKind};
 use std::io::Write;
+use std::io::{Error, ErrorKind};
 use std::net::SocketAddrV4;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -254,7 +254,7 @@ impl McastSender {
         let mut remain = 0;
         loop {
             remain = self.data_fifo.read().unwrap().remain();
-            if self.data_fifo.read().unwrap().close || remain > 0 {
+            if self.data_fifo.read().unwrap().is_closed() || remain > 0 {
                 break;
             }
         }
@@ -318,20 +318,21 @@ impl McastSender {
             let xmit_slice = self.xmit_slice as u32;
             let slice = self.slices.get_mut(&xmit_slice).unwrap();
             if slice.nr_answered < self.clientlist.len() as u32 {
-                if self.lastsendtime.elapsed().as_micros() > 1 {
+                if slice.rxmit_id > 10 {
+                    return self.drop_client() > 0;
+                }
+                if self.lastsendtime.elapsed().as_millis() > 1000 {
+                    slice.rxmit_id += 1;
                     warn!(
-                        "Waiting for response from clients {}/{} {}",
+                        "Waiting for response from clients {}/{}, slice {} rxmit_id={}",
                         slice.nr_answered,
                         self.clientlist.len(),
-                        " ".repeat(10)
+                        slice.slice_no,
+                        slice.rxmit_id,
                     );
-                    slice.rxmit_id += 1;
                     let _ = self.send_reqack();
                     self.lastsendtime = Instant::now();
                     return RUNNING;
-                }
-                if slice.rxmit_id > 10 {
-                    return self.drop_client() > 0;
                 }
                 return RUNNING;
             }

@@ -71,7 +71,7 @@ fn read(disk: &mut Option<Disk>, data_fifo: Arc<RwLock<DataFIFO>>) -> bool {
         if required > 0 {
             if let Some(ref mut disk) = disk {
                 if data_fifo.read().unwrap().endpoint >= disk.size {
-                    data_fifo.write().unwrap().close = true;
+                    data_fifo.write().unwrap().close();
                     info!("read end");
                     return false;
                 }
@@ -85,14 +85,14 @@ fn read(disk: &mut Option<Disk>, data_fifo: Arc<RwLock<DataFIFO>>) -> bool {
                 }
             }
         }
-        if data_fifo.read().unwrap().close {
+        if data_fifo.read().unwrap().is_closed() {
             return false;
         }
     }
 }
 
+// initialize logger
 fn init_logger(args: &Args) {
-    // initialize logger
     let loglevel = args.loglevel.as_ref().unwrap();
     let termlog = TermLogger::new(
         LevelFilter::from_str(&loglevel).unwrap(),
@@ -172,6 +172,6 @@ fn main() {
         }
     }
     sender.display_progress(true);
-    data_fifo.write().unwrap().close = true;
+    data_fifo.write().unwrap().close();
     let _ = disk_thread.join();
 }
