@@ -154,12 +154,13 @@ fn main() {
                     receiver.start_transfer();
                 }
                 if c == 'q' {
-                    let _ = receiver.send_disconnect();
                     break;
                 }
             }
         }
     }
+    
+    let _ = receiver.send_disconnect();
     receiver.display_progress(true);
     data_fifo.write().unwrap().close();
     let _ = disk_thread.join();

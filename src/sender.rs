@@ -366,8 +366,7 @@ impl McastSender {
         let slice = self.slices.get_mut(&msg.sliceno).unwrap();
         let clientaddr = self.socket.receivefrom.unwrap();
         if let Some(&(client_no, _, _)) = self.clientlist.get(&clientaddr) {
-            slice.ready_set.set(client_no, true);
-            slice.nr_answered += 1;
+            slice.responce(client_no);
         }
         trace!("handle {:?} -> {:?}", msg, slice.ready_set);
         return true;
@@ -398,8 +397,7 @@ impl McastSender {
             if self.xmit_slice >= 0 {
                 let xmit_slice = self.xmit_slice as u32;
                 let slice = self.slices.get_mut(&xmit_slice).unwrap();
-                slice.ready_set.set(client_no, false);
-                slice.nr_answered -= 1;
+                slice.remove_client(client_no);
             }
         }
         return true;
@@ -417,7 +415,7 @@ impl McastSender {
     fn handle_retransmit(&mut self, msg: &MsgRetransmit, map: Vec<u8>) -> bool {
         let slice = self.slices.get_mut(&msg.sliceno).unwrap();
         warn!("handle {:?}: {} / {}", msg, msg.rxmit, slice.rxmit_id);
-        slice.nr_answered += 1;
+        // slice.nr_answered += 1;
         if msg.rxmit < slice.rxmit_id {
             return true;
         }

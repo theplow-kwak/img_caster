@@ -222,7 +222,6 @@ impl McastReceiver {
             let _ = self.send_retransmit(msg);
         }
         if getch(0) == Some('q') {
-            let _ = self.send_disconnect();
             return ENDLOOP;
         }
         RUNNING

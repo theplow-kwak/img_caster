@@ -3,6 +3,7 @@ use crate::packet::*;
 use crate::*;
 
 use core::fmt;
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 pub struct Slice {
@@ -21,6 +22,7 @@ pub struct Slice {
     pub last_good_block: u32,
     pub start_time: Instant,
     pub latency: Duration,
+    responces: HashMap<usize, Instant>,
 }
 
 impl Slice {
@@ -41,6 +43,7 @@ impl Slice {
             last_good_block: 0,
             start_time: Instant::now(),
             latency: Duration::new(0, 0),
+            responces: HashMap::new(),
         }
     }
 
@@ -68,6 +71,24 @@ impl Slice {
     pub fn close(&mut self) -> &mut Self {
         self.latency = self.start_time.elapsed();
         self
+    }
+
+    pub fn is_answered(&mut self, client_no: usize) {
+        self.ready_set.set(client_no, true);
+        self.responces.insert(client_no, Instant::now());
+        self.nr_answered += 1;
+    }
+
+    pub fn responce(&mut self, client_no: usize) {
+        self.ready_set.set(client_no, true);
+        self.responces.insert(client_no, Instant::now());
+        self.nr_answered += 1;
+    }
+
+    pub fn remove_client(&mut self, client_no: usize) {
+        self.ready_set.set(client_no, true);
+        self.responces.insert(client_no, Instant::now());
+        self.nr_answered -= 1;
     }
 }
 

@@ -62,7 +62,7 @@ struct Args {
     loglevel: Option<String>,
 }
 
-fn read(disk: &mut Option<Disk>, data_fifo: Arc<RwLock<DataFIFO>>) -> bool {
+fn read(disk: &mut Option<Disk>, data_fifo: &Arc<RwLock<DataFIFO>>) -> bool {
     loop {
         let mut required: usize = MAX_BUFFER_SIZE - data_fifo.read().unwrap().len();
         if (required % READ_CHUNK) != 0 {
@@ -152,9 +152,7 @@ fn main() {
         data_fifo_socket,
     );
 
-    let disk_thread = thread::spawn(move || {
-        read(&mut disk, data_fifo_thread);
-    });
+    let disk_thread = thread::spawn(move || read(&mut disk, &data_fifo_thread));
 
     if let Err(err) = sender.enumerate(Duration::new(args.wait.unwrap_or(60 * 5), 0), args.p2p) {
         error!("{:?}", err);
