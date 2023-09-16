@@ -172,4 +172,9 @@ fn main() {
     sender.display_progress(true);
     data_fifo.write().unwrap().close();
     let _ = disk_thread.join();
+
+    // let events = sender.get_events();
+    // for event in events {
+    //     println!("{:?}", event);
+    // }
 }

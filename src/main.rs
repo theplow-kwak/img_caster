@@ -1,4 +1,4 @@
-use plotly::charts::Scatter;
+use plotly::Scatter;
 use plotly::Plot;
 
 fn main() {

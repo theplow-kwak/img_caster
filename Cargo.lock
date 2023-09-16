@@ -1048,7 +1048,6 @@ dependencies = [
  "system-info",
  "tokio",
  "winapi 0.3.9",
- "winapi-util",
  "windows",
  "windows-drives",
  "winit",

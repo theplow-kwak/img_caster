@@ -126,7 +126,7 @@ impl McastReceiver {
     }
 
     pub fn send_retransmit(&mut self, msg: &MsgReqAck) -> io::Result<usize> {
-        warn!("handle {:?}: {}", msg, msg.rxmit);
+        warn!("send_retransmit {:?}: {}", msg, msg.rxmit);
         let slice = self.get_slice(msg.sliceno, msg.bytes);
         let mut map = slice.retransmit.map.bits();
         let mut buffer =

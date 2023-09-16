@@ -307,6 +307,10 @@ impl McastSender {
             let xmit_slice = self.xmit_slice as u32;
             let slice = self.slices.get_mut(&xmit_slice).unwrap();
             slice.rxmit_id += 1;
+            warn!(
+                "do_retransmissions: retransmits - {}, rxmit_id - {}",
+                self.retransmits, slice.rxmit_id
+            );
         }
         self.retransmits += 1;
         self.send_slice(true);
@@ -334,10 +338,10 @@ impl McastSender {
                     self.lastsendtime = Instant::now();
                     return RUNNING;
                 }
-                return RUNNING;
-            }
-            if slice.need_rxmit {
-                self.do_retransmissions();
+                if slice.need_rxmit {
+                    self.do_retransmissions();
+                    return RUNNING;
+                }
                 return RUNNING;
             }
             self.data_fifo.write().unwrap().pop(slice.bytes as usize);
@@ -367,6 +371,11 @@ impl McastSender {
         let clientaddr = self.socket.receivefrom.unwrap();
         if let Some(&(client_no, _, _)) = self.clientlist.get(&clientaddr) {
             slice.responce(client_no);
+            slice.event(format!(
+                "c{}_{}",
+                client_no,
+                clientaddr.ip().to_string().as_str()
+            ))
         }
         trace!("handle {:?} -> {:?}", msg, slice.ready_set);
         return true;
@@ -390,14 +399,19 @@ impl McastSender {
         return self.clientlist.len();
     }
 
-    fn remove_client(&mut self, client: SocketAddrV4) -> bool {
-        if let Some(&(client_no, _, _)) = self.clientlist.get(&client) {
-            self.clientlist.remove(&client);
-            let _ = self.send_disconnect(client);
+    fn remove_client(&mut self, clientaddr: SocketAddrV4) -> bool {
+        if let Some(&(client_no, _, _)) = self.clientlist.get(&clientaddr) {
+            self.clientlist.remove(&clientaddr);
+            let _ = self.send_disconnect(clientaddr);
             if self.xmit_slice >= 0 {
                 let xmit_slice = self.xmit_slice as u32;
                 let slice = self.slices.get_mut(&xmit_slice).unwrap();
                 slice.remove_client(client_no);
+                slice.event(format!(
+                    "c{}_{}",
+                    client_no,
+                    clientaddr.ip().to_string().as_str()
+                ))
             }
         }
         return true;
@@ -415,7 +429,6 @@ impl McastSender {
     fn handle_retransmit(&mut self, msg: &MsgRetransmit, map: Vec<u8>) -> bool {
         let slice = self.slices.get_mut(&msg.sliceno).unwrap();
         warn!("handle {:?}: {} / {}", msg, msg.rxmit, slice.rxmit_id);
-        // slice.nr_answered += 1;
         if msg.rxmit < slice.rxmit_id {
             return true;
         }
@@ -439,5 +452,17 @@ impl McastSender {
             }
             Err(_err) => return Err("Unexpected error!!"),
         }
+    }
+
+    pub fn get_events(&mut self) -> Vec<(String, Instant, Instant)> {
+        let mut events: Vec<(String, Instant, Instant)> = Vec::new();
+        for (_, slice) in self.slices.iter_mut() {
+            let start_time = slice.start_time;
+            events.push(("slice".to_owned(), start_time, slice.end_time));
+            for (event_id, event_time) in slice.events() {
+                events.push((event_id.to_string(), start_time, *event_time));
+            }
+        }
+        events
     }
 }

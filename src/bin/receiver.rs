@@ -159,7 +159,7 @@ fn main() {
             }
         }
     }
-    
+
     let _ = receiver.send_disconnect();
     receiver.display_progress(true);
     data_fifo.write().unwrap().close();

@@ -1,3 +1,5 @@
+use bincode::Options;
+
 use crate::bitarray::BitArray;
 use crate::packet::*;
 use crate::*;
@@ -21,8 +23,8 @@ pub struct Slice {
     pub nr_answered: u32,
     pub last_good_block: u32,
     pub start_time: Instant,
-    pub latency: Duration,
-    responces: HashMap<usize, Instant>,
+    pub end_time: Instant,
+    events: HashMap<String, Instant>,
 }
 
 impl Slice {
@@ -42,8 +44,8 @@ impl Slice {
             nr_answered: 0,
             last_good_block: 0,
             start_time: Instant::now(),
-            latency: Duration::new(0, 0),
-            responces: HashMap::new(),
+            end_time: Instant::now(),
+            events: HashMap::new(),
         }
     }
 
@@ -69,26 +71,26 @@ impl Slice {
     }
 
     pub fn close(&mut self) -> &mut Self {
-        self.latency = self.start_time.elapsed();
+        self.end_time = Instant::now();
         self
-    }
-
-    pub fn is_answered(&mut self, client_no: usize) {
-        self.ready_set.set(client_no, true);
-        self.responces.insert(client_no, Instant::now());
-        self.nr_answered += 1;
     }
 
     pub fn responce(&mut self, client_no: usize) {
         self.ready_set.set(client_no, true);
-        self.responces.insert(client_no, Instant::now());
         self.nr_answered += 1;
     }
 
     pub fn remove_client(&mut self, client_no: usize) {
-        self.ready_set.set(client_no, true);
-        self.responces.insert(client_no, Instant::now());
+        self.ready_set.set(client_no, false);
         self.nr_answered -= 1;
+    }
+
+    pub fn event(&mut self, id: String) {
+        self.events.insert(id, Instant::now());
+    }
+
+    pub fn events(&mut self) -> std::collections::hash_map::Iter<'_, String, Instant> {
+        self.events.iter()
     }
 }
 

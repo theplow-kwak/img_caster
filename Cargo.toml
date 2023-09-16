@@ -32,4 +32,3 @@ plotly = { version = ">=0.8.0", features = ["plotly_ndarray"] }
 ndarray = "0.15"
 chrono = "0.4"
 plotters = "0.3.5"
-winapi-util = "0.1.5"
