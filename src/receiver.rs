@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::bitarray::BitArray;
 use crate::datafifo::DataFIFO;
 use crate::multicast::*;
 use crate::packet::*;
@@ -201,7 +202,8 @@ impl McastReceiver {
     }
 
     fn process_reqack(&mut self, msg: &MsgReqAck, ready_set: Vec<u8>) -> bool {
-        if (ready_set[self.client_number as usize] & (1 << self.client_number)) != 0 {
+        let ready_set = BitArray::from(ready_set);
+        if ready_set.get(self.client_number as usize) {
             return RUNNING;
         }
         debug!("process_reqack ");

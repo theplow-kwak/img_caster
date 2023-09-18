@@ -19,7 +19,7 @@ pub const READ_CHUNK: usize = CHUNK_SIZE * 16;
 pub const WRITE_CHUNK: usize = CHUNK_SIZE;
 pub const MAX_BUFFER_SIZE: usize = CHUNK_SIZE * 128;
 
-pub const BLOCK_SIZE: u32 = 512 * 3;
+pub const BLOCK_SIZE: u32 = 1468;
 pub const UDP_PACK_SIZE: usize = 2048;
 
 pub const MAX_CLIENTS: u32 = 1024;

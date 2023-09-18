@@ -308,8 +308,8 @@ impl McastSender {
             let slice = self.slices.get_mut(&xmit_slice).unwrap();
             slice.rxmit_id += 1;
             warn!(
-                "do_retransmissions: retransmits - {}, rxmit_id - {}",
-                self.retransmits, slice.rxmit_id
+                "do_retransmissions: retransmits {}, slice_no {} rxmit_id {}",
+                self.retransmits, slice.slice_no, slice.rxmit_id
             );
         }
         self.retransmits += 1;
@@ -338,10 +338,10 @@ impl McastSender {
                     self.lastsendtime = Instant::now();
                     return RUNNING;
                 }
-                if slice.need_rxmit {
-                    self.do_retransmissions();
-                    return RUNNING;
-                }
+                return RUNNING;
+            }
+            if slice.need_rxmit {
+                self.do_retransmissions();
                 return RUNNING;
             }
             self.data_fifo.write().unwrap().pop(slice.bytes as usize);
@@ -364,21 +364,6 @@ impl McastSender {
         self.display_progress(false);
         let _ = self.send_reqack();
         return RUNNING;
-    }
-
-    fn handle_ok(&mut self, msg: &MsgOk) -> bool {
-        let slice = self.slices.get_mut(&msg.sliceno).unwrap();
-        let clientaddr = self.socket.receivefrom.unwrap();
-        if let Some(&(client_no, _, _)) = self.clientlist.get(&clientaddr) {
-            slice.responce(client_no);
-            slice.event(format!(
-                "c{}_{}",
-                client_no,
-                clientaddr.ip().to_string().as_str()
-            ))
-        }
-        trace!("handle {:?} -> {:?}", msg, slice.ready_set);
-        return true;
     }
 
     fn drop_client(&mut self) -> usize {
@@ -426,14 +411,37 @@ impl McastSender {
         return false;
     }
 
-    fn handle_retransmit(&mut self, msg: &MsgRetransmit, map: Vec<u8>) -> bool {
+    fn handle_ok(&mut self, msg: &MsgOk) -> bool {
+        let clientaddr = self.socket.receivefrom.unwrap();
         let slice = self.slices.get_mut(&msg.sliceno).unwrap();
-        warn!("handle {:?}: {} / {}", msg, msg.rxmit, slice.rxmit_id);
+        if let Some(&(client_no, _, _)) = self.clientlist.get(&clientaddr) {
+            slice.responce(client_no);
+            slice.event(format!(
+                "c{}_{}",
+                client_no,
+                clientaddr.ip().to_string().as_str()
+            ))
+        }
+        trace!("handle {:?} -> {:?}", msg, slice.ready_set);
+        return true;
+    }
+
+    fn handle_retransmit(&mut self, msg: &MsgRetransmit, map: Vec<u8>) -> bool {
+        let clientaddr = self.socket.receivefrom.unwrap();
+        let slice = self.slices.get_mut(&msg.sliceno).unwrap();
+        warn!(
+            "handle {:?}: {} / {} from {}",
+            msg,
+            msg.rxmit,
+            slice.rxmit_id,
+            clientaddr.ip().to_string()
+        );
+        slice.nr_answered += 1;
         if msg.rxmit < slice.rxmit_id {
             return true;
         }
         let map = BitArray::from(map);
-        slice.retransmit.map.bits_or(map);
+        slice.retransmit.map |= map;
         slice.need_rxmit = true;
         return true;
     }

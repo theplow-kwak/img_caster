@@ -35,7 +35,7 @@ impl BitArray {
         self
     }
 
-    pub fn get(&mut self, index: usize) -> bool {
+    pub fn get(&self, index: usize) -> bool {
         assert!(index < self.size, "Index out of range");
 
         let byte_index = index / 8;
@@ -44,24 +44,8 @@ impl BitArray {
         (self.bits[byte_index as usize] & (1 << bit_index)) != 0
     }
 
-    pub fn bits_or(&mut self, other: BitArray) -> &mut Self {
-        self.bits = self
-            .bits
-            .iter()
-            .zip(other.bits)
-            .map(|(x, y)| x | y)
-            .collect();
-        self
-    }
-
     pub fn bits(&mut self) -> Vec<u8> {
         self.bits.clone()
-    }
-
-    pub fn from(data: Vec<u8>) -> Self {
-        let size = data.len();
-        let bits = data;
-        Self { bits, size }
     }
 }
 
@@ -86,5 +70,13 @@ impl BitOrAssign for BitArray {
             .zip(rhs.bits.iter())
             .map(|(x, y)| *x | *y)
             .collect();
+    }
+}
+
+impl From<Vec<u8>> for BitArray {
+    fn from(data: Vec<u8>) -> Self {
+        let size = data.len();
+        let bits = data;
+        Self { bits, size }
     }
 }
