@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use crate::bitarray::BitArray;
 use crate::datafifo::DataFIFO;
+use crate::disk::Disk;
 use crate::multicast::*;
 use crate::packet::*;
 use crate::slice::Slice;
@@ -248,6 +249,43 @@ impl McastReceiver {
                 return Ok(RUNNING);
             }
             Err(_err) => return Err("Unexpected error!!"),
+        }
+    }
+}
+
+pub fn write(
+    disk: &mut Option<Disk>,
+    data_fifo: &Arc<RwLock<DataFIFO>>,
+    write_chunk: usize,
+) -> bool {
+    loop {
+        {
+            let mut required = data_fifo.read().unwrap().len();
+            if !data_fifo.read().unwrap().is_closed() && ((required % write_chunk) != 0) {
+                required -= required % write_chunk;
+            }
+            if required > MAX_BUFFER_SIZE {
+                required = MAX_BUFFER_SIZE;
+            }
+            if required > 0 {
+                let elapse = Instant::now();
+                debug!(" 1 -> required: {required}");
+                let data = data_fifo.write().unwrap().pop(required);
+                if let Some(data) = data {
+                    debug!("    data : {}, {:?}", data.len(), elapse.elapsed());
+                    if let Some(ref mut disk) = disk {
+                        let mut iter = data.chunks(write_chunk);
+                        debug!("    iter : ");
+                        while let Some(data) = iter.next() {
+                            let _n = disk.write(&data);
+                        }
+                    }
+                }
+                debug!(" <- required: {:?}", elapse.elapsed());
+            }
+        }
+        if data_fifo.read().unwrap().is_closed() {
+            return true;
         }
     }
 }

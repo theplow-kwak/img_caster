@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use img_caster::datafifo::DataFIFO;
 use img_caster::disk::Disk;
-use img_caster::receiver::McastReceiver;
+use img_caster::receiver::{McastReceiver, write};
 use img_caster::*;
 
 #[derive(Parser, Default, Debug)]
@@ -48,40 +48,6 @@ struct Args {
 
     #[clap(long, default_value = "info")]
     loglevel: Option<String>,
-}
-
-fn write(disk: &mut Option<Disk>, data_fifo: &Arc<RwLock<DataFIFO>>, write_chunk: usize) -> bool {
-    loop {
-        let mut required = 0;
-        {
-            required = data_fifo.read().unwrap().len();
-        }
-        if !data_fifo.read().unwrap().is_closed() && ((required % write_chunk) != 0) {
-            required -= required % write_chunk;
-        }
-        if required > MAX_BUFFER_SIZE {
-            required = MAX_BUFFER_SIZE;
-        }
-        if required > 0 {
-            let elapse = Instant::now();
-            debug!(" 1 -> required: {required}");
-            let data = data_fifo.write().unwrap().pop(required);
-            if let Some(data) = data {
-                debug!("    data : {}, {:?}", data.len(), elapse.elapsed());
-                if let Some(ref mut disk) = disk {
-                    let mut iter = data.chunks(write_chunk);
-                    debug!("    iter : ");
-                    while let Some(data) = iter.next() {
-                        let _n = disk.write(&data);
-                    }
-                }
-            }
-            debug!(" <- required: {:?}", elapse.elapsed());
-        }
-        if data_fifo.read().unwrap().is_closed() {
-            return true;
-        }
-    }
 }
 
 // initialize logger
