@@ -80,3 +80,9 @@ impl From<Vec<u8>> for BitArray {
         Self { bits, size }
     }
 }
+
+impl Into<Vec<u8>> for BitArray {
+    fn into(self) ->  Vec<u8> {
+        self.bits.clone()
+    }
+}
