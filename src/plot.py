@@ -1,12 +1,42 @@
 import plotly.express as px
+import pandas as pd
+import argparse
 
-data = [
-    {"Task": "Task A", "Start": "2023-08-01", "End": "2023-08-10"},
-    {"Task": "Task B", "Start": "2023-08-15", "End": "2023-08-25"},
-    {"Task": "Task C", "Start": "2023-09-05", "End": "2023-09-15"},
-    # 다른 작업 추가 가능
-]
 
-fig = px.timeline(data, x_start="Start", x_end="End", y="Task", title="Broken Bar Chart")
-fig.update_yaxes(categoryorder="total ascending")  # y 축의 카테고리 순서 설정
-fig.show()
+def draw(df, filename):
+
+    for col in ["start", "end"]:
+        df[col] = pd.to_datetime(df[col])
+
+    print(df['start'].min(), df['end'].max())
+
+    fig = px.timeline(df, x_start="start", x_end="end",
+                      y="io_type", color="latency", title=filename)
+
+    # THIS IS A NECESSARY UPDATE!!!!
+    fig.update_xaxes(range=[df['start'].min(), df['end'].max()])
+    fig.update_traces(width=0.3)
+    fig.update_layout(title_x=0.5,
+                      title_y=0.9,
+                      title_xanchor="center",
+                      title_yanchor="middle",
+                      height=400,
+                      )
+
+    fig.show()
+
+
+def main():
+    argparser = argparse.ArgumentParser()
+    argparser.add_argument('filename', help='trace data file (csv)')
+    argparser.add_argument('-v', '--verbose', nargs='?',
+                           default='s', help='verbose display')
+    args = argparser.parse_args()
+
+    df = pd.read_csv(args.filename, skipinitialspace=True)
+
+    draw(df, args.filename)
+
+
+if __name__ == "__main__":
+    main()

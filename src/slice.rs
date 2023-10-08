@@ -1,5 +1,3 @@
-use bincode::Options;
-
 use crate::bitarray::BitArray;
 use crate::packet::*;
 use crate::*;
@@ -66,15 +64,6 @@ impl Slice {
         self.blocks_in_slice == self.blocks_transferred
     }
 
-    pub fn get_pos(&mut self, block_no: u32) -> usize {
-        (self.block_size * block_no) as usize
-    }
-
-    pub fn close(&mut self) -> &mut Self {
-        self.end_time = Instant::now();
-        self
-    }
-
     pub fn responce(&mut self, client_no: usize) {
         self.ready_set.set(client_no, true);
         self.nr_answered += 1;
@@ -86,7 +75,11 @@ impl Slice {
     }
 
     pub fn event(&mut self, id: String) {
-        self.events.insert(id, Instant::now());
+        if self.events.contains_key(&id) {
+            self.events.insert(id + "1", Instant::now());
+        } else {
+            self.events.insert(id, Instant::now());
+        }
     }
 
     pub fn events(&mut self) -> std::collections::hash_map::Iter<'_, String, Instant> {

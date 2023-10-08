@@ -1,18 +1,26 @@
 use core::fmt;
 use log::{debug, error, info, trace, warn};
 
+use crate::*;
+
 pub struct DataFIFO {
     buffer: Box<Vec<u8>>,
-    pub slicebase: usize,
-    pub startpoint: usize,
-    pub endpoint: usize,
-    pub close: bool,
+    capacity: usize,
+    slicebase: usize,
+    startpoint: usize,
+    endpoint: usize,
+    close: bool,
 }
 
 impl DataFIFO {
-    pub fn new() -> Self {
+    pub fn new(capacity: usize) -> Self {
+        let mut capacity = capacity;
+        if capacity < MAX_BUFFER_SIZE {
+            capacity = MAX_BUFFER_SIZE;
+        }
         Self {
-            buffer: Box::new(Vec::new()),
+            buffer: Box::new(vec![0; capacity]),
+            capacity,
             slicebase: 0,
             startpoint: 0,
             endpoint: 0,
@@ -22,42 +30,69 @@ impl DataFIFO {
 
     pub fn push(&mut self, data: &mut [u8]) -> &mut Self {
         let size = data.len();
-        self.buffer.extend_from_slice(&data);
+        let start = self.endpoint % self.capacity;
+        let end = start + size;
+        let split = self.capacity - start;
         self.endpoint += size;
+        if end <= self.capacity {
+            self.buffer[start..end].copy_from_slice(&data[..size]);
+        } else {
+            self.buffer[start..].copy_from_slice(&data[..split]);
+            self.buffer[..size - split].copy_from_slice(&data[split..]);
+        }
         self
     }
 
     pub fn pop(&mut self, size: usize) -> Option<Vec<u8>> {
-        let remain: Vec<_> = self.buffer.drain(..size).collect();
+        let start = self.startpoint % self.capacity;
+        let end = start + size;
+        let split = self.capacity - start;
         self.startpoint += size;
-        Some(remain)
-    }
-
-    pub fn get(&mut self, pos: usize, size: u32) -> Vec<u8> {
-        let start = pos - self.startpoint;
-        let len = self.endpoint - self.startpoint;
-        let mut end = start + size as usize;
-        if end > len {
-            end = len;
+        if end <= self.capacity {
+            Some(self.buffer[start..end].to_vec())
+        } else {
+            let mut data = vec![0; size];
+            data[..split].copy_from_slice(&self.buffer[start..]);
+            data[split..].copy_from_slice(&self.buffer[..size - split]);
+            Some(data)
         }
-        let data = self.buffer[start as usize..end as usize].to_vec();
-        data
     }
 
     pub fn set(&mut self, pos: usize, data: &[u8]) -> &mut Self {
         let size = data.len();
-        let start = pos - self.startpoint;
-        let end = start + size;
-        self.buffer
-            .splice(start as usize..end as usize, data.to_vec());
+        let start = (pos - self.startpoint) % self.capacity;
+        let end = (start + size) % self.capacity;
+        let split = self.capacity - start;
+        if end <= self.capacity {
+            self.buffer[start..end].copy_from_slice(&data[..size]);
+        } else {
+            self.buffer[start..].copy_from_slice(&data[..split]);
+            self.buffer[..size - split].copy_from_slice(&data[split..]);
+        }
         self
+    }
+
+    pub fn get(&mut self, pos: usize, size: u32) -> Vec<u8> {
+        let mut size = size as usize;
+        if pos + size > self.endpoint {
+            size = self.endpoint - pos;
+        }
+        let start = pos % self.capacity;
+        let end = start + size;
+        let split = self.capacity - start;
+        if end <= self.capacity {
+            self.buffer[start..end].to_vec()
+        } else {
+            let mut data = vec![0; size];
+            data[..split].copy_from_slice(&self.buffer[start..]);
+            data[split..].copy_from_slice(&self.buffer[..size - split]);
+            data
+        }
     }
 
     // reserve buffer for received data from server
     pub fn reserve(&mut self, size: u32) -> usize {
         let base = self.slicebase;
-        let mut zvec = vec![0u8; size as usize];
-        self.buffer.append(&mut zvec);
         self.slicebase += size as usize;
         self.endpoint = base;
         trace!(
@@ -79,6 +114,11 @@ impl DataFIFO {
         base
     }
 
+    pub fn drain(&mut self, size: usize) -> &mut Self {
+        self.startpoint += size;
+        self
+    }
+
     pub fn written_bytes(&self) -> usize {
         self.startpoint
     }
@@ -98,6 +138,14 @@ impl DataFIFO {
 
     pub fn remain(&self) -> usize {
         self.endpoint - self.slicebase
+    }
+
+    pub fn slicebase(&self) -> usize {
+        self.slicebase
+    }
+
+    pub fn endpoint(&self) -> usize {
+        self.endpoint
     }
 
     pub fn close(&mut self) -> &mut Self {

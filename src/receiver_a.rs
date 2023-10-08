@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::io;
 use std::io::Write;
 use std::net::SocketAddrV4;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -23,12 +23,12 @@ pub struct McastReceiver {
     client_number: u32,
     block_size: u32,
     max_slices: u32,
-    pub write_chunk: usize,
     pub transferstarted: bool,
-    slices: HashMap<u32, Slice>,
-    start_time: Instant,
+    pub slices: HashMap<u32, Slice>,
+    pub start_time: Instant,
     elaps_time: Instant,
     written_elaps: u128,
+    max_pipesize: usize,
 }
 
 impl McastReceiver {
@@ -43,12 +43,12 @@ impl McastReceiver {
             block_size: 0,
             rcvbuf: rcvbuf as u32,
             max_slices: MAX_SLICE_SIZE,
-            write_chunk: CHUNK_SIZE,
             transferstarted: false,
             slices: HashMap::new(),
             start_time: Instant::now(),
             elaps_time: Instant::now(),
             written_elaps: 0,
+            max_pipesize: MAX_READ_PIPE,
         }
     }
 
@@ -84,7 +84,8 @@ impl McastReceiver {
             }
         }
         info!(
-            "Connected as #{} to {}",
+            "IP: {} Connected as #{} to {}",
+            self.socket.myip_addr,
             self.client_number,
             self.socket.receivefrom.unwrap(),
         );
@@ -95,6 +96,10 @@ impl McastReceiver {
         );
 
         Ok(true)
+    }
+
+    pub fn id(&self) -> String {
+        self.client_number.to_string()
     }
 
     pub fn start_transfer(&mut self) {
@@ -128,7 +133,7 @@ impl McastReceiver {
     }
 
     pub fn send_retransmit(&mut self, msg: &MsgReqAck) -> io::Result<usize> {
-        warn!("send_retransmit {:?}: {}", msg, msg.rxmit);
+        warn!("Request retransmit {:?}: {}", msg, msg.rxmit);
         let slice = self.get_slice(msg.sliceno, msg.bytes);
         let mut map = slice.retransmit.map.bits();
         let mut buffer =
@@ -139,8 +144,9 @@ impl McastReceiver {
 
     fn get_slice(&mut self, slice_no: u32, bytes: u32) -> &mut Slice {
         if !self.slices.contains_key(&slice_no) {
-            while self.data_fifo.read().unwrap().len() > MAX_BUFFER_SIZE * 10 {
-                thread::sleep(Duration::from_micros(500));
+            while self.data_fifo.read().unwrap().len() > self.max_pipesize {
+                thread::sleep(Duration::from_micros(100));
+                debug!("get_slice_mut: waiting for free buffer");
             }
             let base = self.data_fifo.write().unwrap().reserve(bytes);
             self.slices.insert(
@@ -163,12 +169,12 @@ impl McastReceiver {
 
     pub fn display_progress(&mut self, final_disp: bool) {
         let elapsed = self.elaps_time.elapsed();
+        let writtenbytes = self.data_fifo.read().unwrap().written_bytes() as u128;
         if elapsed.as_secs() > 0 || final_disp {
             let difftime = self.start_time.elapsed();
             if difftime.as_millis() == 0 {
                 return;
             }
-            let writtenbytes = self.data_fifo.read().unwrap().written_bytes() as u128;
             let mbps = writtenbytes / difftime.as_millis();
             let mut embps = 0;
             if elapsed.as_millis() > 0 {
@@ -194,7 +200,7 @@ impl McastReceiver {
             println!("\n");
             info!(
                 "{} written in {:?}",
-                Byte::from_bytes(self.data_fifo.read().unwrap().written_bytes() as u128)
+                Byte::from_bytes(writtenbytes)
                     .get_appropriate_unit(false)
                     .to_string(),
                 self.start_time.elapsed()
@@ -207,24 +213,25 @@ impl McastReceiver {
         if ready_set.get(self.client_number as usize) {
             return RUNNING;
         }
-        debug!("process_reqack ");
-        let elapse = Instant::now();
         let slice = self.get_slice(msg.sliceno, msg.bytes);
-        debug!("get slice : {:?}", elapse.elapsed());
         if msg.rxmit == 0 && msg.bytes == 0 {
+            self.data_fifo.write().unwrap().close();
             let _ = self.send_ok(msg.sliceno);
             return ENDLOOP;
         }
         if slice.is_completed() {
-            debug!("slice.is_completed ");
-            slice.close();
+            slice.end_time = Instant::now();
             let _ = self.send_ok(msg.sliceno);
-            self.display_progress(false);
+            self.get_slice(msg.sliceno, msg.bytes)
+                .event("ok".to_string());
         } else {
-            debug!("send_retransmit ");
             let _ = self.send_retransmit(msg);
+            self.get_slice(msg.sliceno, msg.bytes)
+                .event("retransmit".to_string());
         }
+        self.display_progress(false);
         if getch(0) == Some('q') {
+            self.data_fifo.write().unwrap().close();
             return ENDLOOP;
         }
         RUNNING
@@ -251,41 +258,64 @@ impl McastReceiver {
             Err(_err) => return Err("Unexpected error!!"),
         }
     }
+
+    pub fn set_pipesize(&mut self, pipesize: usize) {
+        self.max_pipesize = pipesize;
+    }
+
+    pub fn get_events(&mut self) -> Vec<(String, Instant, Instant)> {
+        let mut events: Vec<(String, Instant, Instant)> = Vec::new();
+        for (_, slice) in self.slices.iter_mut() {
+            let start_time = slice.start_time;
+            events.push(("slice".to_owned(), start_time, slice.end_time));
+            for (event_id, event_time) in slice.events() {
+                events.push((event_id.to_string(), start_time, *event_time));
+            }
+        }
+        events
+    }
 }
 
 pub fn write(
     disk: &mut Option<Disk>,
-    data_fifo: &Arc<RwLock<DataFIFO>>,
+    data_fifo: Arc<RwLock<DataFIFO>>,
     write_chunk: usize,
-) -> bool {
+    disk_trace: Arc<RwLock<Box<Vec<(Instant, Instant)>>>>,
+) {
     loop {
         {
-            let mut required = data_fifo.read().unwrap().len();
-            if !data_fifo.read().unwrap().is_closed() && ((required % write_chunk) != 0) {
-                required -= required % write_chunk;
+            let delay = Instant::now() + Duration::from_millis(50);
+            let mut size = data_fifo.read().unwrap().len();
+            if !data_fifo.read().unwrap().is_closed() && ((size % write_chunk) != 0) {
+                size -= size % write_chunk;
             }
-            if required > MAX_BUFFER_SIZE {
-                required = MAX_BUFFER_SIZE;
+            if size > 20 * 1024 * 1024 {
+                size = 20 * 1024 * 1024;
             }
-            if required > 0 {
-                let elapse = Instant::now();
-                debug!(" 1 -> required: {required}");
-                let data = data_fifo.write().unwrap().pop(required);
+            if size > 0 {
+                let start = Instant::now();
+                debug!(" -> start write {}", data_fifo.read().unwrap().len());
+                let data = data_fifo.write().unwrap().pop(size);
                 if let Some(data) = data {
-                    debug!("    data : {}, {:?}", data.len(), elapse.elapsed());
                     if let Some(ref mut disk) = disk {
                         let mut iter = data.chunks(write_chunk);
-                        debug!("    iter : ");
                         while let Some(data) = iter.next() {
-                            let _n = disk.write(&data);
+                            if let Err(e) = disk.write(&data) {
+                                error!("Disk write Error: {:?}", e);
+                                data_fifo.write().unwrap().close();
+                                break;
+                            }
                         }
                     }
                 }
-                debug!(" <- required: {:?}", elapse.elapsed());
+                let end = Instant::now();
+                debug!(" <- end write {:?}", end - start);
+                disk_trace.write().unwrap().push((start, end));
             }
+            thread::sleep(delay.saturating_duration_since(Instant::now()));
         }
-        if data_fifo.read().unwrap().is_closed() {
-            return true;
+        if data_fifo.read().unwrap().is_closed() && data_fifo.read().unwrap().len() <= 0 {
+            break;
         }
     }
 }

@@ -22,12 +22,12 @@ pub struct McastSender {
     blocksize: u32,
     capabilities: u32,
     clientlist: HashMap<SocketAddrV4, (usize, u32, u32)>,
-    slices: HashMap<u32, Slice>,
+    pub slices: HashMap<u32, Slice>,
     xmit_slice: i32,
     slice_size: u32,
     max_slices: u32,
     retransmits: u32,
-    start_time: Instant,
+    pub start_time: Instant,
     elaps_time: Instant,
     lastsendtime: Instant,
     written_elaps: u128,
@@ -195,12 +195,12 @@ impl McastSender {
                 slice.bytes,
             ))
             .encode();
-            let data = self
+            let mut data = self
                 .data_fifo
                 .write()
                 .unwrap()
                 .get(slice.get_block_pos(blockno), self.blocksize as u32);
-            msg.append(&mut data.to_vec());
+            msg.append(&mut data);
             self.socket.send_to(&msg, self.socket.multicast_addr)
         } else {
             Err(Error::new(ErrorKind::Other, "There is no xmit_slice!"))
@@ -254,7 +254,7 @@ impl McastSender {
         let mut remain = 0;
         loop {
             remain = self.data_fifo.read().unwrap().remain();
-            if self.data_fifo.read().unwrap().is_closed() || remain > 0 {
+            if remain > 0 || self.data_fifo.read().unwrap().is_closed() {
                 break;
             }
         }
@@ -270,7 +270,7 @@ impl McastSender {
             slice_no,
             bytes,
             block_size,
-            self.data_fifo.read().unwrap().slicebase,
+            self.data_fifo.read().unwrap().slicebase(),
             self.max_slices,
         );
         self.data_fifo.write().unwrap().assign(bytes);
@@ -322,17 +322,17 @@ impl McastSender {
             let xmit_slice = self.xmit_slice as u32;
             let slice = self.slices.get_mut(&xmit_slice).unwrap();
             if slice.nr_answered < self.clientlist.len() as u32 {
-                if slice.rxmit_id > 10 {
+                if slice.rxmit_id >= 10 {
                     return self.drop_client() > 0;
                 }
                 if self.lastsendtime.elapsed().as_millis() > 1000 {
                     slice.rxmit_id += 1;
                     warn!(
-                        "Waiting for response from clients {}/{}, slice {} rxmit_id={}",
+                        "Waiting for response from clients {}/{}, sliceno {} rxmit_id {}",
                         slice.nr_answered,
                         self.clientlist.len(),
                         slice.slice_no,
-                        slice.rxmit_id,
+                        slice.rxmit_id
                     );
                     let _ = self.send_reqack();
                     self.lastsendtime = Instant::now();
@@ -344,7 +344,8 @@ impl McastSender {
                 self.do_retransmissions();
                 return RUNNING;
             }
-            self.data_fifo.write().unwrap().pop(slice.bytes as usize);
+            self.data_fifo.write().unwrap().drain(slice.bytes as usize);
+            slice.end_time = Instant::now();
             self.xmit_slice = -1;
             if getch(0) == Some('q') {
                 let _ = self.send_disconnect(self.socket.multicast_addr);
@@ -368,10 +369,10 @@ impl McastSender {
 
     fn drop_client(&mut self) -> usize {
         let mut droplist = Vec::new();
-        for ref client in &self.clientlist {
-            if self.xmit_slice >= 0 {
-                let xmit_slice = self.xmit_slice as u32;
-                let slice = self.slices.get_mut(&xmit_slice).unwrap();
+        if self.xmit_slice >= 0 {
+            let xmit_slice = self.xmit_slice as u32;
+            let slice = self.slices.get_mut(&xmit_slice).unwrap();
+            for ref client in &self.clientlist {
                 if slice.ready_set.get(client.1 .0) == false {
                     droplist.push(*client.0);
                 }
@@ -434,7 +435,7 @@ impl McastSender {
             msg,
             msg.rxmit,
             slice.rxmit_id,
-            clientaddr.ip().to_string()
+            clientaddr.ip()
         );
         slice.nr_answered += 1;
         if msg.rxmit < slice.rxmit_id {
