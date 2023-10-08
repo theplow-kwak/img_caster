@@ -3,7 +3,8 @@ use crate::packet::*;
 use crate::*;
 
 use core::fmt;
-use std::time::Duration;
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 pub struct Slice {
     pub slice_no: u32,
@@ -19,7 +20,9 @@ pub struct Slice {
     pub need_rxmit: bool,
     pub nr_answered: u32,
     pub last_good_block: u32,
-    pub duration: Duration,
+    pub start_time: Instant,
+    pub end_time: Instant,
+    events: HashMap<String, Instant>,
 }
 
 impl Slice {
@@ -38,7 +41,9 @@ impl Slice {
             need_rxmit: false,
             nr_answered: 0,
             last_good_block: 0,
-            duration: Duration::new(0, 0),
+            start_time: Instant::now(),
+            end_time: Instant::now(),
+            events: HashMap::new(),
         }
     }
 
@@ -56,8 +61,29 @@ impl Slice {
     }
 
     pub fn is_completed(&self) -> bool {
-        // self.duration = time.time();
         self.blocks_in_slice == self.blocks_transferred
+    }
+
+    pub fn responce(&mut self, client_no: usize) {
+        self.ready_set.set(client_no, true);
+        self.nr_answered += 1;
+    }
+
+    pub fn remove_client(&mut self, client_no: usize) {
+        self.ready_set.set(client_no, false);
+        self.nr_answered -= 1;
+    }
+
+    pub fn event(&mut self, id: String) {
+        if self.events.contains_key(&id) {
+            self.events.insert(id + "1", Instant::now());
+        } else {
+            self.events.insert(id, Instant::now());
+        }
+    }
+
+    pub fn events(&mut self) -> std::collections::hash_map::Iter<'_, String, Instant> {
+        self.events.iter()
     }
 }
 

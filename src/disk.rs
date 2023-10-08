@@ -198,3 +198,6 @@ impl Write for Disk {
         Ok(())
     }
 }
+
+unsafe impl Send for Disk {}
+unsafe impl Sync for Disk {}

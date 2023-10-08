@@ -2,14 +2,14 @@ use byte_unit::Byte;
 use log::{debug, error, info, trace, warn};
 use std::collections::HashMap;
 use std::io;
+use std::io::Write;
 use std::io::{Error, ErrorKind};
-use std::io::{Read, Write};
 use std::net::SocketAddrV4;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::bitarray::BitArray;
 use crate::datafifo::DataFIFO;
-use crate::disk::Disk;
 use crate::multicast::*;
 use crate::packet::*;
 use crate::slice::Slice;
@@ -18,55 +18,37 @@ use crate::*;
 #[derive(Debug)]
 pub struct McastSender {
     pub socket: MultiCast,
-    pub disk: Option<Disk>,
-    data_fifo: DataFIFO,
+    data_fifo: Arc<RwLock<DataFIFO>>,
     blocksize: u32,
     capabilities: u32,
     clientlist: HashMap<SocketAddrV4, (usize, u32, u32)>,
-    slices: HashMap<u32, Slice>,
+    pub slices: HashMap<u32, Slice>,
     xmit_slice: i32,
     slice_size: u32,
     max_slices: u32,
-    pub read_chunk: usize,
     retransmits: u32,
-    start_time: Instant,
+    pub start_time: Instant,
     elaps_time: Instant,
     lastsendtime: Instant,
     written_elaps: u128,
 }
 
 impl McastSender {
-    pub fn new(
-        nic: usize,
-        filename: &str,
-        transfer_size: usize,
-        ttl: u32,
-        max_slices: u32,
-    ) -> Self {
+    pub fn new(nic: usize, ttl: u32, max_slices: u32, data_fifo: Arc<RwLock<DataFIFO>>) -> Self {
         let socket = MultiCast::sender(nic);
         let _ = socket.set_ttl(ttl);
 
-        let mut disk = Disk::open(filename.to_string(), 'r');
-        if let Some(ref mut disk) = disk {
-            if transfer_size > 0 {
-                disk.size = transfer_size;
-            }
-            info!("{:?}", disk);
-        }
-
         Self {
             socket,
-            disk,
             max_slices,
+            data_fifo,
             blocksize: BLOCK_SIZE,
             capabilities: 0,
             retransmits: 0,
             slice_size: 130,
-            read_chunk: CHUNK_SIZE * 16,
             xmit_slice: -1,
             clientlist: HashMap::new(),
             slices: HashMap::new(),
-            data_fifo: DataFIFO::new(),
             start_time: Instant::now(),
             elaps_time: Instant::now(),
             lastsendtime: Instant::now(),
@@ -213,10 +195,12 @@ impl McastSender {
                 slice.bytes,
             ))
             .encode();
-            let data = self
+            let mut data = self
                 .data_fifo
+                .write()
+                .unwrap()
                 .get(slice.get_block_pos(blockno), self.blocksize as u32);
-            msg.append(&mut data.to_vec());
+            msg.append(&mut data);
             self.socket.send_to(&msg, self.socket.multicast_addr)
         } else {
             Err(Error::new(ErrorKind::Other, "There is no xmit_slice!"))
@@ -230,7 +214,7 @@ impl McastSender {
             if difftime.as_millis() == 0 {
                 return;
             }
-            let writtenbytes = self.data_fifo.written_bytes() as u128;
+            let writtenbytes = self.data_fifo.read().unwrap().written_bytes() as u128;
             let mbps = writtenbytes / difftime.as_millis();
             let mut embps = 0;
             if elapsed.as_millis() > 0 {
@@ -257,7 +241,7 @@ impl McastSender {
             println!("\n");
             info!(
                 "{} transferd in {:?}",
-                Byte::from_bytes(self.data_fifo.written_bytes() as u128)
+                Byte::from_bytes(self.data_fifo.read().unwrap().written_bytes() as u128)
                     .get_appropriate_unit(false)
                     .to_string(),
                 self.start_time.elapsed()
@@ -267,24 +251,29 @@ impl McastSender {
 
     fn make_slice(&mut self, block_size: u32, slice_size: u32) -> &mut Slice {
         let mut slice_size = slice_size;
-        if block_size as u32 * slice_size
-            > (self.data_fifo.endpoint - self.data_fifo.slicebase) as u32
-        {
-            slice_size = (self.data_fifo.endpoint - self.data_fifo.slicebase) as u32 / block_size;
+        let mut remain = 0;
+        loop {
+            remain = self.data_fifo.read().unwrap().remain();
+            if remain > 0 || self.data_fifo.read().unwrap().is_closed() {
+                break;
+            }
         }
-        let mut size = block_size * slice_size;
-        if size == 0 {
-            size = (self.data_fifo.endpoint - self.data_fifo.slicebase) as u32;
+        if block_size as u32 * slice_size > remain as u32 {
+            slice_size = remain as u32 / block_size;
+        }
+        let mut bytes = block_size * slice_size;
+        if bytes == 0 {
+            bytes = remain as u32;
         }
         let slice_no = self.slices.len() as u32;
         let slice = Slice::new(
             slice_no,
-            size,
+            bytes,
             block_size,
-            self.data_fifo.slicebase,
+            self.data_fifo.read().unwrap().slicebase(),
             self.max_slices,
         );
-        self.data_fifo.assign(size);
+        self.data_fifo.write().unwrap().assign(bytes);
         self.slices.insert(slice_no, slice);
         self.xmit_slice = slice_no as i32;
         let slice = self.slices.get_mut(&slice_no).unwrap();
@@ -318,30 +307,14 @@ impl McastSender {
             let xmit_slice = self.xmit_slice as u32;
             let slice = self.slices.get_mut(&xmit_slice).unwrap();
             slice.rxmit_id += 1;
+            warn!(
+                "do_retransmissions: retransmits {}, slice_no {} rxmit_id {}",
+                self.retransmits, slice.slice_no, slice.rxmit_id
+            );
         }
         self.retransmits += 1;
         self.send_slice(true);
         let _ = self.send_reqack();
-    }
-
-    pub fn read(&mut self) -> bool {
-        let mut required: usize = MAX_BUFFER_SIZE - self.data_fifo.len();
-        if (required % self.read_chunk) != 0 {
-            required -= required % self.read_chunk;
-        }
-        if let Some(ref mut disk) = self.disk {
-            if self.data_fifo.endpoint >= disk.size {
-                return false;
-            }
-            let mut buff = Box::new(vec![0u8; required]);
-            if let Ok(size) = disk.read(&mut buff) {
-                trace!("read {size} bytes");
-                if size > 0 {
-                    self.data_fifo.push(&mut buff[..size]);
-                }
-            }
-        }
-        return true;
     }
 
     pub fn transfer_data(&mut self) -> bool {
@@ -349,20 +322,21 @@ impl McastSender {
             let xmit_slice = self.xmit_slice as u32;
             let slice = self.slices.get_mut(&xmit_slice).unwrap();
             if slice.nr_answered < self.clientlist.len() as u32 {
-                if self.lastsendtime.elapsed().as_secs() > 0 {
+                if slice.rxmit_id >= 10 {
+                    return self.drop_client() > 0;
+                }
+                if self.lastsendtime.elapsed().as_millis() > 1000 {
+                    slice.rxmit_id += 1;
                     warn!(
-                        "Waiting for response from clients {}/{} {}",
+                        "Waiting for response from clients {}/{}, sliceno {} rxmit_id {}",
                         slice.nr_answered,
                         self.clientlist.len(),
-                        " ".repeat(10)
+                        slice.slice_no,
+                        slice.rxmit_id
                     );
-                    slice.rxmit_id += 1;
                     let _ = self.send_reqack();
                     self.lastsendtime = Instant::now();
                     return RUNNING;
-                }
-                if slice.rxmit_id > 10 {
-                    return self.drop_client() > 0;
                 }
                 return RUNNING;
             }
@@ -370,7 +344,8 @@ impl McastSender {
                 self.do_retransmissions();
                 return RUNNING;
             }
-            self.data_fifo.pop(slice.bytes as usize);
+            self.data_fifo.write().unwrap().drain(slice.bytes as usize);
+            slice.end_time = Instant::now();
             self.xmit_slice = -1;
             if getch(0) == Some('q') {
                 let _ = self.send_disconnect(self.socket.multicast_addr);
@@ -379,7 +354,7 @@ impl McastSender {
         }
 
         self.lastsendtime = Instant::now();
-        self.read();
+        // self.read();
 
         let slice = self.make_slice(self.blocksize as u32, self.slice_size);
         if slice.bytes == 0 {
@@ -392,23 +367,12 @@ impl McastSender {
         return RUNNING;
     }
 
-    fn handle_ok(&mut self, msg: &MsgOk) -> bool {
-        let slice = self.slices.get_mut(&msg.sliceno).unwrap();
-        let clientaddr = self.socket.receivefrom.unwrap();
-        if let Some(&(client_no, _, _)) = self.clientlist.get(&clientaddr) {
-            slice.ready_set.set(client_no, true);
-            slice.nr_answered += 1;
-        }
-        trace!("handle {:?} -> {:?}", msg, slice.ready_set);
-        return true;
-    }
-
     fn drop_client(&mut self) -> usize {
         let mut droplist = Vec::new();
-        for ref client in &self.clientlist {
-            if self.xmit_slice >= 0 {
-                let xmit_slice = self.xmit_slice as u32;
-                let slice = self.slices.get_mut(&xmit_slice).unwrap();
+        if self.xmit_slice >= 0 {
+            let xmit_slice = self.xmit_slice as u32;
+            let slice = self.slices.get_mut(&xmit_slice).unwrap();
+            for ref client in &self.clientlist {
                 if slice.ready_set.get(client.1 .0) == false {
                     droplist.push(*client.0);
                 }
@@ -421,15 +385,19 @@ impl McastSender {
         return self.clientlist.len();
     }
 
-    fn remove_client(&mut self, client: SocketAddrV4) -> bool {
-        if let Some(&(client_no, _, _)) = self.clientlist.get(&client) {
-            self.clientlist.remove(&client);
-            let _ = self.send_disconnect(client);
+    fn remove_client(&mut self, clientaddr: SocketAddrV4) -> bool {
+        if let Some(&(client_no, _, _)) = self.clientlist.get(&clientaddr) {
+            self.clientlist.remove(&clientaddr);
+            let _ = self.send_disconnect(clientaddr);
             if self.xmit_slice >= 0 {
                 let xmit_slice = self.xmit_slice as u32;
                 let slice = self.slices.get_mut(&xmit_slice).unwrap();
-                slice.ready_set.set(client_no, false);
-                slice.nr_answered -= 1;
+                slice.remove_client(client_no);
+                slice.event(format!(
+                    "c{}_{}",
+                    client_no,
+                    clientaddr.ip().to_string().as_str()
+                ))
             }
         }
         return true;
@@ -444,15 +412,37 @@ impl McastSender {
         return false;
     }
 
-    fn handle_retransmit(&mut self, msg: &MsgRetransmit, map: Vec<u8>) -> bool {
+    fn handle_ok(&mut self, msg: &MsgOk) -> bool {
+        let clientaddr = self.socket.receivefrom.unwrap();
         let slice = self.slices.get_mut(&msg.sliceno).unwrap();
-        warn!("handle {:?}: {} / {}", msg, msg.rxmit, slice.rxmit_id);
+        if let Some(&(client_no, _, _)) = self.clientlist.get(&clientaddr) {
+            slice.responce(client_no);
+            slice.event(format!(
+                "c{}_{}",
+                client_no,
+                clientaddr.ip().to_string().as_str()
+            ))
+        }
+        trace!("handle {:?} -> {:?}", msg, slice.ready_set);
+        return true;
+    }
+
+    fn handle_retransmit(&mut self, msg: &MsgRetransmit, map: Vec<u8>) -> bool {
+        let clientaddr = self.socket.receivefrom.unwrap();
+        let slice = self.slices.get_mut(&msg.sliceno).unwrap();
+        warn!(
+            "handle {:?}: {} / {} from {}",
+            msg,
+            msg.rxmit,
+            slice.rxmit_id,
+            clientaddr.ip()
+        );
         slice.nr_answered += 1;
         if msg.rxmit < slice.rxmit_id {
             return true;
         }
         let map = BitArray::from(map);
-        slice.retransmit.map.bits_or(map);
+        slice.retransmit.map |= map;
         slice.need_rxmit = true;
         return true;
     }
@@ -469,11 +459,19 @@ impl McastSender {
             Err(ref err) if err.kind() == std::io::ErrorKind::TimedOut => {
                 return Ok(true);
             }
-            Err(ref err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                self.read();
-                return Ok(true);
-            }
             Err(_err) => return Err("Unexpected error!!"),
         }
+    }
+
+    pub fn get_events(&mut self) -> Vec<(String, Instant, Instant)> {
+        let mut events: Vec<(String, Instant, Instant)> = Vec::new();
+        for (_, slice) in self.slices.iter_mut() {
+            let start_time = slice.start_time;
+            events.push(("slice".to_owned(), start_time, slice.end_time));
+            for (event_id, event_time) in slice.events() {
+                events.push((event_id.to_string(), start_time, *event_time));
+            }
+        }
+        events
     }
 }

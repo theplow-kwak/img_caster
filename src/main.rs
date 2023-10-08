@@ -1,119 +1,69 @@
-use clap::Parser;
-use std::fs::File;
-use std::io::{Read, Result};
-use std::net::{SocketAddr, UdpSocket};
-use std::sync::mpsc;
-use std::sync::{Arc, Mutex, RwLock};
-use std::thread;
-
-#[derive(Parser, Default, Debug)]
-#[clap(author, version, about)]
-/// Sender for Multicast File Transfer
-struct Args {
-    /// File name to transmit data.
-    #[clap(short, long, value_name = "FILE")]
-    filepath: Option<String>,
-
-    /// PhysicalDrive number. ex) 1 -> "\\.\PhysicalDrive1"
-    #[clap(short, long)]
-    driveno: Option<u8>,
+#[derive(Debug)]
+struct RingBuffer {
+    buffer: Vec<u8>,
+    size: usize,
+    read_pos: usize,
+    write_pos: usize,
 }
 
-#[derive(Default, Debug)]
-struct MyStruct {
-    data: Box<Vec<u8>>,
-    start: usize,
-    end: usize,
-    index: usize,
+impl RingBuffer {
+    fn new(size: usize) -> Self {
+        RingBuffer {
+            buffer: vec![0; size],
+            size,
+            read_pos: 0,
+            write_pos: 0,
+        }
+    }
+
+    fn write(&mut self, data: &[u8]) -> usize {
+        let available_space = self.size - self.used_space();
+        let write_len = std::cmp::min(available_space, data.len());
+
+        let write_end = self.write_pos + write_len;
+        if write_end <= self.size {
+            self.buffer[self.write_pos..write_end].copy_from_slice(&data[..write_len]);
+        } else {
+            let split = self.size - self.write_pos;
+            self.buffer[self.write_pos..].copy_from_slice(&data[..split]);
+            self.buffer[..write_len - split].copy_from_slice(&data[split..]);
+        }
+
+        self.write_pos = (self.write_pos + write_len) % self.size;
+        write_len
+    }
+
+    fn read(&mut self, dest: &mut [u8]) -> usize {
+        let available_data = self.used_space();
+        let read_len = std::cmp::min(available_data, dest.len());
+
+        let read_end = self.read_pos + read_len;
+        if read_end <= self.size {
+            dest[..read_len].copy_from_slice(&self.buffer[self.read_pos..read_end]);
+        } else {
+            let split = self.size - self.read_pos;
+            dest[..split].copy_from_slice(&self.buffer[self.read_pos..]);
+            dest[split..read_len].copy_from_slice(&self.buffer[..read_len - split]);
+        }
+
+        self.read_pos = (self.read_pos + read_len) % self.size;
+        read_len
+    }
+
+    fn used_space(&self) -> usize {
+        (self.write_pos + self.size - self.read_pos) % self.size
+    }
 }
 
 fn main() {
-    let my_struct = MyStruct {
-        data: Box::new(Vec::new()),
-        start: 0,
-        end: 0,
-        index: 0,
-    };
+    let mut buf = RingBuffer::new(15);
 
-    let shared_data = Arc::new(RwLock::new(my_struct));
-
-    let thread_shared_data = Arc::clone(&shared_data);
-    let sub_thread = thread::spawn(move || {
-        // Access the shared data in the sub-thread
-        let mut data = thread_shared_data.write().unwrap();
-        data.start = 100;
-        data.end = 200;
-    });
-
-    // Access the shared data in the main thread
-    let mut data = shared_data.write().unwrap();
-    data.index = 42;
-
-    // Wait for the sub-thread to finish
-    sub_thread.join().unwrap();
-
-    // Access and print modified data
-    println!("start: {}, end: {}, index: {}", data.start, data.end, data.index);
-}
-
-fn read_and_send(mut file: &File, tx: mpsc::Sender<Vec<u8>>) {
-    let mut buffer = [0; 1024];
-    loop {
-        match file.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(bytes_read) => {
-                let data = buffer[..bytes_read].to_vec();
-                println!("read data: {} {:?}", data.len(), &data[..10]);
-                if tx.send(data).is_err() {
-                    eprintln!("Error sending data to sender thread");
-                    break;
-                }
-            }
-            Err(e) => {
-                eprintln!("Error reading file: {:?}", e);
-                break;
-            }
-        }
-    }
-}
-
-fn udp_sender(socket: UdpSocket, rx: mpsc::Receiver<Vec<u8>>) {
-    let dest_addr: SocketAddr = "127.0.0.1:54321".parse().unwrap();
-    while let Ok(data) = rx.recv() {
-        println!("send data: {} {:?}", data.len(), &data[..10]);
-        if let Err(e) = socket.send_to(&data, dest_addr) {
-            eprintln!("Error sending data: {:?}", e);
-            break;
-        }
-    }
-}
-
-pub fn get_interfaces() {
-    let interfaces = default_net::get_interfaces();
-    for interface in interfaces {
-        println!("Interface");
-        println!("\tIndex: {}", interface.index);
-        println!("\tName: {}", interface.name);
-        println!("\tFriendly Name: {:?}", interface.friendly_name);
-        println!("\tDescription: {:?}", interface.description);
-        println!("\tType: {}", interface.if_type.name());
-        if let Some(mac_addr) = interface.mac_addr {
-            println!("\tMAC: {}", mac_addr);
-        } else {
-            println!("\tMAC: (Failed to get mac address)");
-        }
-        println!("\tIPv4: {:?}", interface.ipv4);
-        println!("\tIPv6: {:?}", interface.ipv6);
-        println!("\tFlags: {:?}", interface.flags);
-        println!("\tTransmit Speed: {:?}", interface.transmit_speed);
-        println!("\tReceive Speed: {:?}", interface.receive_speed);
-        if let Some(gateway) = interface.gateway {
-            println!("Gateway");
-            println!("\tMAC: {}", gateway.mac_addr);
-            println!("\tIP: {}", gateway.ip_addr);
-        } else {
-            println!("Gateway: (Not found)");
-        }
-        println!();
-    }
+    buf.write(&vec![1,2,3,4,5,6,7,8]);
+    println!("{:?}", buf);
+    buf.write(&vec![9,10,11,12,13,14,15,16]);
+    println!("{:?}", buf);
+    buf.write(&vec![17,18,19,20,21,22,23,24,25]);
+    println!("{:?}", buf);
+    buf.write(&vec![26,27,28,29,30,31,32,33,34,35,36,37]);
+    println!("{:?}", buf);
 }

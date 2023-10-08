@@ -3,12 +3,18 @@ use clap::Parser;
 use log::{debug, error, info, trace, warn, LevelFilter};
 use simplelog::*;
 use std::fs::File;
+use std::io::{Read, Write};
 use std::str::FromStr;
-use std::time::Duration;
+use std::sync::{Arc, RwLock};
+use std::thread;
+use std::time::{Duration, Instant};
 
+use img_caster::datafifo::DataFIFO;
+use img_caster::disk::Disk;
 use img_caster::sender::McastSender;
+use img_caster::*;
 
-#[derive(Parser, Default, Debug, Clone)]
+#[derive(Parser, Default, Debug)]
 #[clap(author, version, about)]
 /// Sender for Multicast File Transfer
 struct Args {
@@ -40,13 +46,13 @@ struct Args {
     #[clap(long, default_value = "2048")]
     slices: Option<String>,
 
-    /// set to Async file read
-    #[clap(short, long)]
-    async_mode: bool,
-
-    /// enable to p2p mode
+    /// enable to p2p connection
     #[clap(short, long)]
     p2p: bool,
+
+    /// Number of sectors to set read chunk size.
+    #[clap(short, long, default_value = "8192")]
+    chunk: Option<String>,
 
     /// Log file name
     #[clap(short, long)]
@@ -56,8 +62,44 @@ struct Args {
     loglevel: Option<String>,
 }
 
+fn read(
+    disk: &mut Option<Disk>,
+    data_fifo: Arc<RwLock<DataFIFO>>,
+    read_chunk: usize,
+    disk_trace: Arc<RwLock<Box<Vec<(Instant, Instant)>>>>,
+) -> bool {
+    loop {
+        let delay = Instant::now() + Duration::from_millis(50);
+        let mut size: usize = MAX_BUFFER_SIZE - data_fifo.read().unwrap().len();
+        if (size % read_chunk) != 0 {
+            size -= size % read_chunk;
+        }
+        if let Some(ref mut disk) = disk {
+            if data_fifo.read().unwrap().endpoint() >= disk.size {
+                data_fifo.write().unwrap().close();
+                trace!("read end");
+                return false;
+            }
+            let start = Instant::now();
+            let mut buff = Box::new(vec![0u8; size]);
+            if let Ok(size) = disk.read(&mut buff) {
+                trace!("read {size} bytes");
+                if size > 0 {
+                    data_fifo.write().unwrap().push(&mut buff[..size]);
+                    let end = Instant::now();
+                    disk_trace.write().unwrap().push((start, end));
+                }
+            }
+        }
+        if data_fifo.read().unwrap().is_closed() {
+            return false;
+        }
+        thread::sleep(delay.saturating_duration_since(Instant::now()));
+    }
+}
+
+// initialize logger
 fn init_logger(args: &Args) {
-    // initialize logger
     let loglevel = args.loglevel.as_ref().unwrap();
     let termlog = TermLogger::new(
         LevelFilter::from_str(&loglevel).unwrap(),
@@ -90,20 +132,45 @@ fn main() {
     }
 
     init_logger(&args);
+    println!("Img_Caster: sender v{}\n", VERSION);
+
+    let read_chunk = Byte::from_str(args.chunk.clone().unwrap())
+        .unwrap()
+        .get_bytes() as usize
+        * SECTOR_SIZE;
 
     let mut transfer_size = 0;
     if let Some(size) = args.size {
         transfer_size = Byte::from_str(size).unwrap().get_bytes() as usize;
     }
 
+    // Open file
+    let mut disk = Disk::open(filename.to_string(), 'r');
+    if let Some(ref mut disk) = disk {
+        if transfer_size > 0 {
+            disk.size = transfer_size;
+        }
+        info!("{:?}", disk);
+    }
+
+    let data_fifo = Arc::new(RwLock::new(DataFIFO::new(MAX_BUFFER_SIZE)));
+    let data_fifo_thread = Arc::clone(&data_fifo);
+    let data_fifo_socket = Arc::clone(&data_fifo);
+
+    let disk_trace: Arc<RwLock<Box<Vec<(Instant, Instant)>>>> =
+        Arc::new(RwLock::new(Box::new(Vec::new())));
+    let disk_trace_thread = Arc::clone(&disk_trace);
+
     // Open Network socket sender
     let mut sender = McastSender::new(
         args.nic.unwrap_or(0),
-        &filename,
-        transfer_size,
         args.ttl.unwrap(),
-        Byte::from_str(args.slices.unwrap()).unwrap().get_bytes() as u32,
+        Byte::from_str(args.slices.clone().unwrap()).unwrap().get_bytes() as u32,
+        data_fifo_socket,
     );
+    let disk_thread =
+        thread::spawn(move || read(&mut disk, data_fifo_thread, read_chunk, disk_trace_thread));
+    // thread::sleep(Duration::from_secs(2));
 
     if let Err(err) = sender.enumerate(Duration::new(args.wait.unwrap_or(60 * 5), 0), args.p2p) {
         error!("{:?}", err);
@@ -120,5 +187,18 @@ fn main() {
             }
         }
     }
+    data_fifo.write().unwrap().close();
+    let _ = disk_thread.join();
     sender.display_progress(true);
+
+    let filename = format!(
+        "as{}_{}.csv",
+        sender.socket.myip_addr.ip().to_string(),
+        args.slices.unwrap()
+    );
+    let mut events = sender.get_events();
+    for (start_time, end_time) in disk_trace.write().unwrap().iter() {
+        events.push(("disk".to_owned(), *start_time, *end_time));
+    }
+    save_trace(&filename, events, sender.start_time);
 }

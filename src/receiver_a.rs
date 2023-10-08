@@ -4,8 +4,11 @@ use std::collections::HashMap;
 use std::io;
 use std::io::Write;
 use std::net::SocketAddrV4;
-use std::time::Instant;
+use std::sync::{Arc, RwLock};
+use std::thread;
+use std::time::{Duration, Instant};
 
+use crate::bitarray::BitArray;
 use crate::datafifo::DataFIFO;
 use crate::disk::Disk;
 use crate::multicast::*;
@@ -15,44 +18,37 @@ use crate::*;
 
 pub struct McastReceiver {
     pub socket: MultiCast,
-    pub disk: Option<Disk>,
-    data_fifo: DataFIFO,
+    data_fifo: Arc<RwLock<DataFIFO>>,
     rcvbuf: u32,
     client_number: u32,
     block_size: u32,
     max_slices: u32,
-    pub write_chunk: usize,
     pub transferstarted: bool,
-    slices: HashMap<u32, Slice>,
-    start_time: Instant,
+    pub slices: HashMap<u32, Slice>,
+    pub start_time: Instant,
     elaps_time: Instant,
     written_elaps: u128,
+    max_pipesize: usize,
 }
 
 impl McastReceiver {
-    pub fn new(nic: usize, filename: &str, rcvbuf: usize) -> Self {
+    pub fn new(nic: usize, rcvbuf: usize, data_fifo: Arc<RwLock<DataFIFO>>) -> Self {
         let socket = MultiCast::receiver(nic, rcvbuf);
         socket.join_multicast().unwrap();
 
-        let disk = Disk::open(filename.to_string(), 'w');
-        if let Some(ref d) = disk {
-            info!("{:?}", d);
-        }
-
         Self {
             socket,
-            disk,
+            data_fifo,
             client_number: 0,
             block_size: 0,
             rcvbuf: rcvbuf as u32,
             max_slices: MAX_SLICE_SIZE,
-            write_chunk: CHUNK_SIZE,
             transferstarted: false,
             slices: HashMap::new(),
-            data_fifo: DataFIFO::new(),
             start_time: Instant::now(),
             elaps_time: Instant::now(),
             written_elaps: 0,
+            max_pipesize: MAX_READ_PIPE,
         }
     }
 
@@ -88,7 +84,8 @@ impl McastReceiver {
             }
         }
         info!(
-            "Connected as #{} to {}",
+            "IP: {} Connected as #{} to {}",
+            self.socket.myip_addr,
             self.client_number,
             self.socket.receivefrom.unwrap(),
         );
@@ -99,6 +96,10 @@ impl McastReceiver {
         );
 
         Ok(true)
+    }
+
+    pub fn id(&self) -> String {
+        self.client_number.to_string()
     }
 
     pub fn start_transfer(&mut self) {
@@ -132,8 +133,8 @@ impl McastReceiver {
     }
 
     pub fn send_retransmit(&mut self, msg: &MsgReqAck) -> io::Result<usize> {
-        warn!("handle {:?}: {}", msg, msg.rxmit);
-        let slice = self.get_slice_mut(msg.sliceno, msg.bytes);
+        warn!("Request retransmit {:?}: {}", msg, msg.rxmit);
+        let slice = self.get_slice(msg.sliceno, msg.bytes);
         let mut map = slice.retransmit.map.bits();
         let mut buffer =
             Message::CmdRetransmit(MsgRetransmit::new(msg.sliceno, msg.rxmit)).encode();
@@ -141,57 +142,39 @@ impl McastReceiver {
         self.socket.send_msg(&buffer)
     }
 
-    fn get_slice_mut(&mut self, slice_no: u32, bytes: u32) -> &mut Slice {
+    fn get_slice(&mut self, slice_no: u32, bytes: u32) -> &mut Slice {
         if !self.slices.contains_key(&slice_no) {
+            while self.data_fifo.read().unwrap().len() > self.max_pipesize {
+                thread::sleep(Duration::from_micros(100));
+                debug!("get_slice_mut: waiting for free buffer");
+            }
+            let base = self.data_fifo.write().unwrap().reserve(bytes);
             self.slices.insert(
                 slice_no,
-                Slice::new(
-                    slice_no,
-                    bytes,
-                    self.block_size,
-                    self.data_fifo.reserve(bytes),
-                    self.max_slices,
-                ),
+                Slice::new(slice_no, bytes, self.block_size, base, self.max_slices),
             );
         }
         let slice = self.slices.get_mut(&slice_no).unwrap();
         return slice;
     }
 
-    fn get_slice(&mut self, slice_no: u32, bytes: u32) -> &Slice {
-        if !self.slices.contains_key(&slice_no) {
-            self.slices.insert(
-                slice_no,
-                Slice::new(
-                    slice_no,
-                    bytes,
-                    self.block_size,
-                    self.data_fifo.reserve(bytes),
-                    self.max_slices,
-                ),
-            );
-        }
-        let slice = self.slices.get(&slice_no).unwrap();
-        return slice;
-    }
-
     fn process_datablock(&mut self, msg: &DataBlock, data: Vec<u8>) -> bool {
-        let slice = self.get_slice_mut(msg.sliceno, msg.bytes);
+        let slice = self.get_slice(msg.sliceno, msg.bytes);
         if slice.update_block(msg.blockno as u32) {
             let pos = slice.get_block_pos(msg.blockno as u32);
-            self.data_fifo.set(pos, &data);
+            self.data_fifo.write().unwrap().set(pos, &data);
         }
         RUNNING
     }
 
     pub fn display_progress(&mut self, final_disp: bool) {
         let elapsed = self.elaps_time.elapsed();
+        let writtenbytes = self.data_fifo.read().unwrap().written_bytes() as u128;
         if elapsed.as_secs() > 0 || final_disp {
             let difftime = self.start_time.elapsed();
             if difftime.as_millis() == 0 {
                 return;
             }
-            let writtenbytes = self.data_fifo.written_bytes() as u128;
             let mbps = writtenbytes / difftime.as_millis();
             let mut embps = 0;
             if elapsed.as_millis() > 0 {
@@ -217,7 +200,7 @@ impl McastReceiver {
             println!("\n");
             info!(
                 "{} written in {:?}",
-                Byte::from_bytes(self.data_fifo.written_bytes() as u128)
+                Byte::from_bytes(writtenbytes)
                     .get_appropriate_unit(false)
                     .to_string(),
                 self.start_time.elapsed()
@@ -225,46 +208,30 @@ impl McastReceiver {
         }
     }
 
-    fn write(&mut self, size: u32) -> io::Result<()> {
-        let mut required: usize = self.data_fifo.len();
-        if size > 0 && ((required % self.write_chunk) != 0) {
-            required -= required % self.write_chunk;
-        }
-        if let Some(data) = self.data_fifo.pop(required) {
-            if let Some(ref mut disk) = self.disk {
-                let mut iter = data.chunks(self.write_chunk);
-                while let Some(data) = iter.next() {
-                    let _n = disk.write(&data)?;
-                }
-            }
-        }
-        Ok(())
-    }
-
     fn process_reqack(&mut self, msg: &MsgReqAck, ready_set: Vec<u8>) -> bool {
-        if (ready_set[self.client_number as usize] & (1 << self.client_number)) != 0 {
+        let ready_set = BitArray::from(ready_set);
+        if ready_set.get(self.client_number as usize) {
             return RUNNING;
         }
         let slice = self.get_slice(msg.sliceno, msg.bytes);
         if msg.rxmit == 0 && msg.bytes == 0 {
-            if let Err(err) = self.write(0) {
-                error!("Write error {:?}", err);
-                return ENDLOOP;
-            };
+            self.data_fifo.write().unwrap().close();
             let _ = self.send_ok(msg.sliceno);
             return ENDLOOP;
         }
         if slice.is_completed() {
-            if let Err(err) = self.write(msg.bytes) {
-                error!("Write error {:?}", err);
-                return ENDLOOP;
-            };
+            slice.end_time = Instant::now();
             let _ = self.send_ok(msg.sliceno);
-            self.display_progress(false);
+            self.get_slice(msg.sliceno, msg.bytes)
+                .event("ok".to_string());
         } else {
             let _ = self.send_retransmit(msg);
+            self.get_slice(msg.sliceno, msg.bytes)
+                .event("retransmit".to_string());
         }
+        self.display_progress(false);
         if getch(0) == Some('q') {
+            self.data_fifo.write().unwrap().close();
             return ENDLOOP;
         }
         RUNNING
@@ -288,14 +255,67 @@ impl McastReceiver {
             Err(ref err) if err.kind() == std::io::ErrorKind::TimedOut => {
                 return Ok(RUNNING);
             }
-            Err(ref err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                if let Err(err) = self.write(CHUNK_SIZE as u32) {
-                    error!("Write error {:?}", err);
-                    return Ok(ENDLOOP);
-                };
-                return Ok(RUNNING);
-            }
             Err(_err) => return Err("Unexpected error!!"),
+        }
+    }
+
+    pub fn set_pipesize(&mut self, pipesize: usize) {
+        self.max_pipesize = pipesize;
+    }
+
+    pub fn get_events(&mut self) -> Vec<(String, Instant, Instant)> {
+        let mut events: Vec<(String, Instant, Instant)> = Vec::new();
+        for (_, slice) in self.slices.iter_mut() {
+            let start_time = slice.start_time;
+            events.push(("slice".to_owned(), start_time, slice.end_time));
+            for (event_id, event_time) in slice.events() {
+                events.push((event_id.to_string(), start_time, *event_time));
+            }
+        }
+        events
+    }
+}
+
+pub fn write(
+    disk: &mut Option<Disk>,
+    data_fifo: Arc<RwLock<DataFIFO>>,
+    write_chunk: usize,
+    disk_trace: Arc<RwLock<Box<Vec<(Instant, Instant)>>>>,
+) {
+    loop {
+        {
+            let delay = Instant::now() + Duration::from_millis(50);
+            let mut size = data_fifo.read().unwrap().len();
+            if !data_fifo.read().unwrap().is_closed() && ((size % write_chunk) != 0) {
+                size -= size % write_chunk;
+            }
+            if size > 20 * 1024 * 1024 {
+                size = 20 * 1024 * 1024;
+            }
+            if size > 0 {
+                let start = Instant::now();
+                debug!(" -> start write {}", data_fifo.read().unwrap().len());
+                let data = data_fifo.write().unwrap().pop(size);
+                if let Some(data) = data {
+                    if let Some(ref mut disk) = disk {
+                        let mut iter = data.chunks(write_chunk);
+                        while let Some(data) = iter.next() {
+                            if let Err(e) = disk.write(&data) {
+                                error!("Disk write Error: {:?}", e);
+                                data_fifo.write().unwrap().close();
+                                break;
+                            }
+                        }
+                    }
+                }
+                let end = Instant::now();
+                debug!(" <- end write {:?}", end - start);
+                disk_trace.write().unwrap().push((start, end));
+            }
+            thread::sleep(delay.saturating_duration_since(Instant::now()));
+        }
+        if data_fifo.read().unwrap().is_closed() && data_fifo.read().unwrap().len() <= 0 {
+            break;
         }
     }
 }

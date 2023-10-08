@@ -6,11 +6,12 @@ use std::fs::File;
 use std::io::Write;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use img_caster::datafifo::DataFIFO;
 use img_caster::disk::Disk;
-use img_caster::receiver_s::McastReceiver;
+use img_caster::receiver_a::{McastReceiver, write};
 use img_caster::*;
 
 #[derive(Parser, Default, Debug)]
@@ -39,6 +40,9 @@ struct Args {
 
     #[clap(long, default_value = "info")]
     loglevel: Option<String>,
+
+    #[clap(long, default_value = "512MiB")]
+    pipesize: Option<String>,
 
     /// Receive buffer size.
     #[clap(long, default_value = "8MiB")]
@@ -79,15 +83,17 @@ fn main() {
     }
 
     init_logger(&args);
-    println!("Img_Caster(sync): receiver v{}\n", VERSION);
+    println!("Img_Caster: receiver v{}\n", VERSION);
 
     // Open file
-    let disk = Disk::open(filename.to_string(), 'w');
+    let mut disk = Disk::open(filename.to_string(), 'w');
     if let Some(ref d) = disk {
         info!("{:?}", d);
     }
 
-    let data_fifo_socket = DataFIFO::new(MAX_BUFFER_SIZE);
+    let data_fifo = Arc::new(RwLock::new(DataFIFO::new(MAX_BUFFER_SIZE)));
+    let data_fifo_thread = Arc::clone(&data_fifo);
+    let data_fifo_socket = Arc::clone(&data_fifo);
 
     let disk_trace: Arc<RwLock<Box<Vec<(Instant, Instant)>>>> =
         Arc::new(RwLock::new(Box::new(Vec::new())));
@@ -99,16 +105,16 @@ fn main() {
         .get_bytes() as usize
         * SECTOR_SIZE;
     let rcvbuf = Byte::from_str(args.rcvbuf.unwrap()).unwrap().get_bytes() as usize;
-    let mut receiver = McastReceiver::new(
-        args.nic.unwrap_or(0),
-        rcvbuf,
-        data_fifo_socket,
-        disk,
-        disk_trace_thread,
-    );
+    let pipesize = Byte::from_str(args.pipesize.clone().unwrap())
+        .unwrap()
+        .get_bytes() as usize;
+    let mut receiver = McastReceiver::new(args.nic.unwrap_or(0), rcvbuf, data_fifo_socket);
+    receiver.set_pipesize(pipesize);
+
+    let disk_thread =
+        thread::spawn(move || write(&mut disk, data_fifo_thread, write_chunk, disk_trace_thread));
 
     let _ = receiver.enumerate();
-    receiver.write_chunk = write_chunk;
 
     println!("\nPress 'Enter' to start receiving data!\n");
 
@@ -128,15 +134,20 @@ fn main() {
                 }
             }
         }
+        if data_fifo.read().unwrap().is_closed() {
+            break;
+        }
     }
     let _ = receiver.send_disconnect();
+    let _ = disk_thread.join();
     receiver.display_progress(true);
 
     let filename = format!(
-        "sr{}_{}_{}.csv",
+        "ar{}_{}_{}_{}.csv",
         receiver.id(),
         receiver.socket.myip_addr.ip().to_string(),
         args.chunk.unwrap(),
+        args.pipesize.unwrap()
     );
     let mut events = receiver.get_events();
     for (start_time, end_time) in disk_trace.write().unwrap().iter() {

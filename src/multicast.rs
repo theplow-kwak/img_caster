@@ -100,10 +100,10 @@ impl MultiCast {
         // Create a UDP socket
         let socket = Socket::new(Domain::IPV4, Type::DGRAM, None).unwrap();
         let _ = socket.set_recv_buffer_size(rcvbuf);
-        let _ = socket.set_read_timeout(Some(Duration::from_millis(100)));
         let _ = socket.bind(&myip_addr.into());
 
         let socket: UdpSocket = socket.into();
+        let _ = socket.set_read_timeout(Some(Duration::from_millis(50)));
 
         Self {
             socket,
@@ -125,8 +125,7 @@ impl MultiCast {
 
         // Create a UDP socket
         let socket = UdpSocket::bind(myip_addr.to_string()).expect("Failed to bind socket");
-
-        let _ = socket.set_read_timeout(Some(Duration::from_millis(100)));
+        let _ = socket.set_read_timeout(Some(Duration::from_millis(10)));
 
         Self {
             socket,
