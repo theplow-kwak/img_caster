@@ -1,69 +1,73 @@
-#[derive(Debug)]
-struct RingBuffer {
-    buffer: Vec<u8>,
-    size: usize,
-    read_pos: usize,
-    write_pos: usize,
-}
+extern crate winapi;
 
-impl RingBuffer {
-    fn new(size: usize) -> Self {
-        RingBuffer {
-            buffer: vec![0; size],
-            size,
-            read_pos: 0,
-            write_pos: 0,
-        }
-    }
-
-    fn write(&mut self, data: &[u8]) -> usize {
-        let available_space = self.size - self.used_space();
-        let write_len = std::cmp::min(available_space, data.len());
-
-        let write_end = self.write_pos + write_len;
-        if write_end <= self.size {
-            self.buffer[self.write_pos..write_end].copy_from_slice(&data[..write_len]);
-        } else {
-            let split = self.size - self.write_pos;
-            self.buffer[self.write_pos..].copy_from_slice(&data[..split]);
-            self.buffer[..write_len - split].copy_from_slice(&data[split..]);
-        }
-
-        self.write_pos = (self.write_pos + write_len) % self.size;
-        write_len
-    }
-
-    fn read(&mut self, dest: &mut [u8]) -> usize {
-        let available_data = self.used_space();
-        let read_len = std::cmp::min(available_data, dest.len());
-
-        let read_end = self.read_pos + read_len;
-        if read_end <= self.size {
-            dest[..read_len].copy_from_slice(&self.buffer[self.read_pos..read_end]);
-        } else {
-            let split = self.size - self.read_pos;
-            dest[..split].copy_from_slice(&self.buffer[self.read_pos..]);
-            dest[split..read_len].copy_from_slice(&self.buffer[..read_len - split]);
-        }
-
-        self.read_pos = (self.read_pos + read_len) % self.size;
-        read_len
-    }
-
-    fn used_space(&self) -> usize {
-        (self.write_pos + self.size - self.read_pos) % self.size
-    }
-}
+use winapi::shared::devguid::GUID_DEVCLASS_DISKDRIVE;
+use winapi::shared::ntdef::NULL;
+use winapi::um::cfgmgr32::{
+    CM_Get_Device_IDA, CM_Get_Parent, CM_Locate_DevNodeA, CM_Locate_DevNode_ExA, CR_SUCCESS,
+};
+use winapi::um::setupapi::{DIGCF_ALLCLASSES, HDEVINFO, SPDRP_DEVICEDESC};
 
 fn main() {
-    let mut buf = RingBuffer::new(15);
+    unsafe {
+        let mut device_info_set: HDEVINFO = winapi::um::setupapi::SetupDiGetClassDevsA(
+            &GUID_DEVCLASS_DISKDRIVE,
+            NULL as *const i8,
+            NULL as *mut winapi::shared::windef::HWND__,
+            DIGCF_ALLCLASSES,
+        );
 
-    buf.write(&vec![1,2,3,4,5,6,7,8]);
-    println!("{:?}", buf);
-    buf.write(&vec![9,10,11,12,13,14,15,16]);
-    println!("{:?}", buf);
-    buf.write(&vec![17,18,19,20,21,22,23,24,25]);
-    println!("{:?}", buf);
-    buf.write(&vec![26,27,28,29,30,31,32,33,34,35,36,37]);
-    println!("{:?}", buf);
+        if device_info_set.is_null() {
+            println!("SetupDiGetClassDevs failed");
+            return;
+        }
+
+        let mut dev_info_data: winapi::um::setupapi::SP_DEVINFO_DATA = std::mem::zeroed();
+        dev_info_data.cbSize = std::mem::size_of::<winapi::um::setupapi::SP_DEVINFO_DATA>() as u32;
+
+        let mut index: u32 = 0;
+        let mut device_id: [u8; 1000] = [0; 1000];
+
+        while winapi::um::setupapi::SetupDiEnumDeviceInfo(
+            device_info_set,
+            index,
+            &mut dev_info_data,
+        ) != 0
+        {
+            if winapi::um::setupapi::SetupDiGetDeviceInstanceIdA(
+                device_info_set,
+                &mut dev_info_data,
+                device_id.as_mut_ptr() as *mut i8,
+                1000,
+                NULL as *mut u32,
+            ) != 0
+            {
+                let device_id_str =
+                    std::ffi::CStr::from_ptr(device_id.as_ptr() as *const i8).to_string_lossy();
+                println!("Device ID: {}", device_id_str);
+
+                let mut parent: winapi::um::cfgmgr32::DEVINST = std::mem::zeroed();
+                if winapi::um::cfgmgr32::CM_Get_Parent(&mut parent, dev_info_data.DevInst, 0)
+                    == CR_SUCCESS
+                {
+                    let mut device_id_parent: [u8; 1000] = [0; 1000];
+                    if winapi::um::cfgmgr32::CM_Get_Device_IDA(
+                        parent,
+                        device_id_parent.as_mut_ptr() as *mut i8,
+                        1000,
+                        0,
+                    ) == CR_SUCCESS
+                    {
+                        let device_id_parent_str =
+                            std::ffi::CStr::from_ptr(device_id_parent.as_ptr() as *const i8)
+                                .to_string_lossy();
+                        println!("Parent Device ID: {}", device_id_parent_str);
+                    }
+                }
+            }
+
+            index += 1;
+        }
+
+        winapi::um::setupapi::SetupDiDestroyDeviceInfoList(device_info_set);
+    }
 }
