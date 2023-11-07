@@ -4,7 +4,7 @@ use crate::*;
 
 use core::fmt;
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 pub struct Slice {
     pub slice_no: u32,

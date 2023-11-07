@@ -1,5 +1,5 @@
 use byte_unit::Byte;
-use log::{debug, error, info, trace, warn};
+use log::{info, trace, warn};
 use std::collections::HashMap;
 use std::io;
 use std::io::Write;
@@ -258,7 +258,7 @@ impl McastSender {
                 break;
             }
         }
-        if block_size as u32 * slice_size > remain as u32 {
+        if block_size * slice_size > remain as u32 {
             slice_size = remain as u32 / block_size;
         }
         let mut bytes = block_size * slice_size;

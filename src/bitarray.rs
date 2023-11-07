@@ -41,7 +41,7 @@ impl BitArray {
         let byte_index = index / 8;
         let bit_index = index % 8;
 
-        (self.bits[byte_index as usize] & (1 << bit_index)) != 0
+        (self.bits[byte_index] & (1 << bit_index)) != 0
     }
 
     pub fn bits(&mut self) -> Vec<u8> {

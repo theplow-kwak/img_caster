@@ -1,11 +1,11 @@
 use byte_unit::Byte;
-use log::{debug, error, info, trace, warn};
+use log::{debug, error, info, warn};
 use std::collections::HashMap;
 use std::io;
 use std::io::Write;
 use std::net::SocketAddrV4;
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::bitarray::BitArray;
 use crate::datafifo::DataFIFO;

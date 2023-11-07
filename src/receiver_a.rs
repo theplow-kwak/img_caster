@@ -1,5 +1,5 @@
 use byte_unit::Byte;
-use log::{debug, error, info, trace, warn};
+use log::{debug, info, warn, error};
 use std::collections::HashMap;
 use std::io;
 use std::io::Write;

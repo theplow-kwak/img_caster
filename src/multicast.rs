@@ -2,7 +2,7 @@ use crate::packet::Message;
 use crate::*;
 
 use ipnet::Ipv4Net;
-use log::{debug, error, info, trace, warn};
+use log::trace;
 use socket2::{Domain, Socket, Type};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};

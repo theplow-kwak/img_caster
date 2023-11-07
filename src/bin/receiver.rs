@@ -1,12 +1,11 @@
 use byte_unit::Byte;
 use clap::Parser;
-use log::{debug, error, info, trace, warn, LevelFilter};
+use log::{info, LevelFilter};
 use simplelog::*;
 use std::fs::File;
-use std::io::Write;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use img_caster::datafifo::DataFIFO;
 use img_caster::disk::Disk;

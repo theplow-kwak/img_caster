@@ -1,9 +1,9 @@
 use byte_unit::Byte;
 use clap::Parser;
-use log::{debug, error, info, trace, warn, LevelFilter};
+use log::{info, trace, LevelFilter, error};
 use simplelog::*;
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::thread;

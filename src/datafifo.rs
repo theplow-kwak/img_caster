@@ -1,5 +1,5 @@
 use core::fmt;
-use log::{debug, error, info, trace, warn};
+use log::trace;
 
 use crate::*;
 
