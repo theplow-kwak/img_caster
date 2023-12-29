@@ -60,8 +60,8 @@ impl DataFIFO {
 
     pub fn set(&mut self, pos: usize, data: &[u8]) -> &mut Self {
         let size = data.len();
-        let start = (pos - self.startpoint) % self.capacity;
-        let end = (start + size) % self.capacity;
+        let start = pos % self.capacity;
+        let end = start + size;
         let split = self.capacity - start;
         if end <= self.capacity {
             self.buffer[start..end].copy_from_slice(&data[..size]);
