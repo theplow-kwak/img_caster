@@ -42,6 +42,10 @@ struct Args {
     /// Receive buffer size.
     #[clap(long, default_value = "8MiB")]
     rcvbuf: Option<String>,
+
+    /// enable to FUA mode
+    #[clap(long)]
+    fua: Option<bool>,
 }
 
 // initialize logger
@@ -74,14 +78,19 @@ fn main() {
         filename = filepath.to_string();
     }
     if let Some(driveno) = args.driveno {
-        filename = format!("\\\\.\\PhysicalDrive{driveno}");
+        let drv_c = img_caster::disk::get_physical_drv_number_from_logical_drv("C".to_string());
+        if drv_c == driveno as i32 {
+            println!("Can't write to system drive {driveno}");
+        } else {
+            filename = format!("\\\\.\\PhysicalDrive{driveno}");
+        }
     }
 
     init_logger(&args);
     println!("Img_Caster(sync): receiver v{}\n", VERSION);
 
     // Open file
-    let disk = Disk::open(filename.to_string(), 'w');
+    let disk = Disk::open(filename.to_string(), 'w', args.fua);
     if let Some(ref d) = disk {
         info!("{:?}", d);
     }

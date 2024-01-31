@@ -1,6 +1,6 @@
 use byte_unit::Byte;
 use clap::Parser;
-use log::{info, trace, LevelFilter, error};
+use log::{error, info, trace, LevelFilter};
 use simplelog::*;
 use std::fs::File;
 use std::io::Read;
@@ -60,6 +60,10 @@ struct Args {
 
     #[clap(long, default_value = "info")]
     loglevel: Option<String>,
+
+    /// enable to FUA mode
+    #[clap(long)]
+    fua: Option<bool>,
 }
 
 fn read(
@@ -145,7 +149,7 @@ fn main() {
     }
 
     // Open file
-    let mut disk = Disk::open(filename.to_string(), 'r');
+    let mut disk = Disk::open(filename.to_string(), 'r', args.fua);
     if let Some(ref mut disk) = disk {
         if transfer_size > 0 {
             disk.size = transfer_size;
@@ -165,7 +169,9 @@ fn main() {
     let mut sender = McastSender::new(
         args.nic.unwrap_or(0),
         args.ttl.unwrap(),
-        Byte::from_str(args.slices.clone().unwrap()).unwrap().get_bytes() as u32,
+        Byte::from_str(args.slices.clone().unwrap())
+            .unwrap()
+            .get_bytes() as u32,
         data_fifo_socket,
     );
     let disk_thread =

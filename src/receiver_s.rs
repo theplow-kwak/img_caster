@@ -291,10 +291,18 @@ impl McastReceiver {
                 if let Some(ref mut disk) = self.disk {
                     let mut iter = data.chunks(self.write_chunk);
                     while let Some(data) = iter.next() {
-                        if let Err(e) = disk.write(&data) {
-                            error!("Disk write Error: {:?}", e);
-                            self.data_fifo.close();
-                            return Err(e);
+                        if disk.fua.is_some() {
+                            if let Err(e) = disk.scsi_write(&data) {
+                                error!("Disk write Error: {:?}", e);
+                                self.data_fifo.close();
+                                return Err(e);
+                            }
+                        } else {
+                            if let Err(e) = disk.write(&data) {
+                                error!("Disk write Error: {:?}", e);
+                                self.data_fifo.close();
+                                return Err(e);
+                            }
                         }
                     }
                 }

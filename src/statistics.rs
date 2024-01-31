@@ -76,7 +76,7 @@ impl SubAssign<&Amount> for Amount {
 
 #[derive(Debug, Clone, Copy)]
 pub struct State {
-    time: Instant,
+    // time: Instant,
     disk_io: Amount,
     sock_io: Amount,
 }
@@ -84,7 +84,7 @@ pub struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
-            time: Instant::now(),
+            // time: Instant::now(),
             disk_io: Amount::default(),
             sock_io: Amount::default(),
         }
@@ -94,7 +94,7 @@ impl Default for State {
 impl State {
     pub fn now(&self) -> State {
         State {
-            time: Instant::now(),
+            // time: Instant::now(),
             disk_io: self.disk_io,
             sock_io: self.sock_io,
         }
@@ -121,7 +121,7 @@ impl Sub for State {
     type Output = State;
     fn sub(self, rhs: State) -> State {
         State {
-            time: Instant::now(),
+            // time: Instant::now(),
             disk_io: self.disk_io - rhs.disk_io,
             sock_io: self.sock_io - rhs.sock_io,
         }

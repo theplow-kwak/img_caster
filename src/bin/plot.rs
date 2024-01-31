@@ -1,11 +1,11 @@
 use ndarray::{Array, Ix1, Ix2};
 use plotly::color::NamedColor;
-use plotly::common::{Fill, Font, Mode};
+use plotly::common::Mode;
 use plotly::layout::{
-    Axis, GridPattern, Layout, LayoutGrid, Margin, Shape, ShapeLayer, ShapeLine, ShapeType,
+    Axis, Layout, Shape, ShapeLine, ShapeType,
 };
 use plotly::ndarray::ArrayTraces;
-use plotly::{Bar, Plot, Scatter};
+use plotly::{Plot, Scatter};
 
 fn vertical_and_horizontal_lines_positioned_relative_to_axes(show: bool) {
     let trace = Scatter::new(vec![2.0, 3.5, 6.0], vec![1.0, 1.5, 1.0])
@@ -63,7 +63,6 @@ fn vertical_and_horizontal_lines_positioned_relative_to_axes(show: bool) {
 }
 
 fn multiple_ndarray_traces_over_columns(show: bool) {
-    let n: usize = 2;
     let t: Array<f64, Ix1> = Array::range(0., 10., 5.);
     let mut ys: Array<f64, Ix2> = Array::zeros((5, 11));
     let mut count = 0.;

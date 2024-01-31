@@ -771,7 +771,7 @@ dependencies = [
 
 [[package]]
 name = "img_caster"
-version = "1.3.0"
+version = "1.5.0"
 dependencies = [
  "byte-unit",
  "clap",
@@ -780,13 +780,14 @@ dependencies = [
  "endian_codec",
  "ipnet",
  "log",
+ "memoffset",
  "ndarray",
  "plotly",
  "plotters",
  "simplelog",
  "socket2",
- "winapi",
  "windows-drives",
+ "windows-sys",
 ]
 
 [[package]]
@@ -909,6 +910,15 @@ name = "memchr"
 version = "2.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f232d6ef707e1956a43342693d2a31e72989554d58299d7a88738cc95b0d35c"
+
+[[package]]
+name = "memoffset"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5aa361d4faea93603064a027415f07bd8e1d5c88c9fbf68bf56a285428fd79ce"
+dependencies = [
+ "autocfg",
+]
 
 [[package]]
 name = "mime"

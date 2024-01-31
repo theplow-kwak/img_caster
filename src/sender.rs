@@ -249,6 +249,7 @@ impl McastSender {
         }
     }
 
+    #[allow(unused_assignments)]
     fn make_slice(&mut self, block_size: u32, slice_size: u32) -> &mut Slice {
         let mut slice_size = slice_size;
         let mut remain = 0;

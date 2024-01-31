@@ -1,5 +1,5 @@
 use byte_unit::Byte;
-use log::{debug, info, warn, error};
+use log::{debug, error, info, warn};
 use std::collections::HashMap;
 use std::io;
 use std::io::Write;
@@ -300,10 +300,18 @@ pub fn write(
                     if let Some(ref mut disk) = disk {
                         let mut iter = data.chunks(write_chunk);
                         while let Some(data) = iter.next() {
-                            if let Err(e) = disk.write(&data) {
-                                error!("Disk write Error: {:?}", e);
-                                data_fifo.write().unwrap().close();
-                                break;
+                            if disk.fua.is_some() {
+                                if let Err(e) = disk.scsi_write(&data) {
+                                    error!("Disk write Error: {:?}", e);
+                                    data_fifo.write().unwrap().close();
+                                    break;
+                                }
+                            } else {
+                                if let Err(e) = disk.write(&data) {
+                                    error!("Disk write Error: {:?}", e);
+                                    data_fifo.write().unwrap().close();
+                                    break;
+                                }
                             }
                         }
                     }

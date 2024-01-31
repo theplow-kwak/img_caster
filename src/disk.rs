@@ -1,130 +1,137 @@
-use log::{debug, error, info, trace, warn};
-use std::io;
-use winapi::{
-    ctypes::c_void,
-    shared::ntdef::LARGE_INTEGER,
-    um::{
-        errhandlingapi::GetLastError,
-        fileapi::{self as fs, CREATE_ALWAYS, OPEN_EXISTING},
-        handleapi::INVALID_HANDLE_VALUE,
-        ioapiset::DeviceIoControl,
-        winbase::{FILE_FLAG_NO_BUFFERING, FILE_FLAG_WRITE_THROUGH},
-        winioctl::{DISK_GEOMETRY_EX, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX},
-        winnt::{FILE_SHARE_READ, FILE_SHARE_WRITE, GENERIC_READ, GENERIC_WRITE, HANDLE},
-    },
+use endian_codec::EncodeBE;
+use log::warn;
+use windows_sys::{
+    Win32::Foundation::*, Win32::Storage::FileSystem::*, Win32::Storage::IscsiDisc::*,
+    Win32::System::Ioctl::*, Win32::System::IO::*,
 };
 
 use std::{
+    ffi::c_void,
+    fmt,
     io::{Read, Write},
-    mem::size_of,
-    ptr::null_mut,
+    mem::{size_of, size_of_val, zeroed},
+    ptr::{null, null_mut},
 };
 
+use crate::scsi::*;
 use crate::SECTOR_SIZE;
 
 pub fn last_error() -> u32 {
     unsafe { GetLastError() }
 }
 
-#[derive(Copy, Clone, Debug)]
-pub struct DiskGeometryEx {
-    pub cylinders: i64,
-    pub media_type: u32,
-    pub tracks_per_cylinder: u32,
-    pub sectors_per_track: u32,
-    pub bytes_per_sector: u32,
-    pub disk_size: i64,
-    data: [u8; 1],
-}
-
-impl DiskGeometryEx {
-    /// Returns the size of the disk in bytes.
-    pub fn size(&self) -> u64 {
-        self.sectors() * self.bytes_per_sector as u64
-    }
-
-    /// Returns the number of sectors of the disk.
-    pub fn sectors(&self) -> u64 {
-        self.cylinders as u64 * self.tracks_per_cylinder as u64 * self.sectors_per_track as u64
-    }
-}
-
-impl From<DISK_GEOMETRY_EX> for DiskGeometryEx {
-    fn from(geo: DISK_GEOMETRY_EX) -> Self {
-        DiskGeometryEx {
-            cylinders: unsafe { *geo.Geometry.Cylinders.QuadPart() },
-            media_type: geo.Geometry.MediaType,
-            tracks_per_cylinder: geo.Geometry.TracksPerCylinder,
-            sectors_per_track: geo.Geometry.SectorsPerTrack,
-            bytes_per_sector: geo.Geometry.BytesPerSector,
-            disk_size: unsafe { *geo.DiskSize.QuadPart() },
-            data: geo.Data,
-        }
-    }
-}
-
-fn geometry(drive: &HANDLE) -> usize {
-    let mut geo = Default::default();
-    let mut bytes_returned = 0u32;
-    let geo_ptr: *mut DISK_GEOMETRY_EX = &mut geo;
-    let r = unsafe {
-        DeviceIoControl(
-            *drive,
-            IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
+pub fn open(path: &String, rw: char) -> isize {
+    let temphandle = 0;
+    let filename = std::ffi::CString::new(path.as_str()).unwrap();
+    let handle = unsafe {
+        CreateFileA(
+            filename.as_ptr() as *const u8,
+            if rw == 'w' {
+                GENERIC_WRITE | GENERIC_READ
+            } else {
+                GENERIC_READ
+            },
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
             null_mut(),
-            0,
-            geo_ptr as *mut c_void,
-            size_of::<DISK_GEOMETRY_EX>() as u32,
+            if rw == 'w' && !path.contains("PhysicalDrive") {
+                CREATE_ALWAYS
+            } else {
+                OPEN_EXISTING
+            },
+            FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH,
+            temphandle,
+        )
+    };
+    handle
+}
+
+pub fn ioctl(
+    handle: isize,
+    control_code: u32,
+    in_buffer: Option<(*const c_void, usize)>,
+    out_buffer: Option<(*mut c_void, usize)>,
+) -> std::io::Result<usize> {
+    let mut bytes_returned = 0u32;
+    let (in_buffer, in_buffer_size) = in_buffer.unwrap_or((null(), 0));
+    let (out_buffer, out_buffer_size) = out_buffer.unwrap_or((null_mut(), 0));
+    let ok = unsafe {
+        DeviceIoControl(
+            handle,
+            control_code,
+            in_buffer,
+            in_buffer_size as u32,
+            out_buffer,
+            out_buffer_size as u32,
             &mut bytes_returned,
             null_mut(),
         )
     };
-    if r == 0 {
-        0 as usize
+    if ok == 0 {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("Error code: {:#08x}", last_error()),
+        ))
     } else {
-        DiskGeometryEx::from(geo).disk_size as usize
+        Ok(bytes_returned as usize)
+    }
+}
+
+fn geometry(drive: &HANDLE) -> usize {
+    let mut geo: DISK_GEOMETRY_EX = unsafe { zeroed() };
+    if let Ok(_r) = {
+        ioctl(
+            *drive,
+            IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
+            Some((null_mut(), 0)),
+            Some((&mut geo as *mut _ as *mut c_void, size_of_val(&geo))),
+        )
+    } {
+        geo.DiskSize as usize
+    } else {
+        0 as usize
     }
 }
 
 fn getfilesize(drive: &HANDLE) -> usize {
-    let mut bytes_returned = LARGE_INTEGER::default();
-    let r = unsafe { fs::GetFileSizeEx(*drive, &mut bytes_returned) };
+    let mut bytes_returned = 0;
+    let r = unsafe { GetFileSizeEx(*drive, &mut bytes_returned) };
     if r == 0 {
         geometry(drive)
     } else {
-        unsafe { *bytes_returned.QuadPart() as usize }
+        bytes_returned as usize
     }
 }
 
-#[derive(Debug)]
 pub struct Disk {
     path: String,
     rw: char,
-    handle: HANDLE,
+    pub handle: HANDLE,
     pub size: usize,
+    pub lba_shift: u8,
+    write_offset: u64,
+    request: ScsiPassThroughDirectSenseBuffer,
+    pub fua: Option<bool>,
+}
+
+impl fmt::Debug for Disk {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Display::fmt(self, fmt)
+    }
+}
+
+impl fmt::Display for Disk {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            fmt,
+            "Disk path: \"{}\", rw: '{}', handle: {}, size: {}, fua: {:?}",
+            self.path, self.rw, self.handle, self.size, self.fua,
+        )
+    }
 }
 
 impl Disk {
-    pub fn open(path: String, rw: char) -> Option<Disk> {
-        let handle = unsafe {
-            fs::CreateFileA(
-                std::ffi::CString::new(path.as_str()).unwrap().as_ptr(),
-                if rw == 'w' {
-                    GENERIC_WRITE
-                } else {
-                    GENERIC_READ
-                },
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
-                null_mut(),
-                if rw == 'w' && !path.contains("PhysicalDrive") {
-                    CREATE_ALWAYS
-                } else {
-                    OPEN_EXISTING
-                },
-                FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH,
-                null_mut(),
-            )
-        };
+    pub fn open(path: String, rw: char, fua: Option<bool>) -> Option<Disk> {
+        let handle = open(&path, rw);
         if handle == INVALID_HANDLE_VALUE {
             warn!("Can't open file!! '{}'", path);
             None
@@ -134,6 +141,10 @@ impl Disk {
                 rw,
                 handle,
                 size: getfilesize(&handle),
+                lba_shift: 9,
+                write_offset: 0,
+                request: ScsiPassThroughDirectSenseBuffer::new(SCSI_IOCTL_DATA_OUT),
+                fua,
             })
         }
     }
@@ -142,13 +153,183 @@ impl Disk {
     pub fn size(&self) -> usize {
         self.size
     }
+
+    pub fn scsi_open(&mut self, path: String) {
+        unsafe { CloseHandle(self.handle) };
+        self.handle = INVALID_HANDLE_VALUE;
+
+        let handle = open(&path, self.rw);
+        if handle == INVALID_HANDLE_VALUE {
+            warn!("Can't open file!! '{}'", path);
+        } else {
+            self.handle = handle;
+        }
+    }
+
+    pub fn get_scsi_address(&self) -> std::io::Result<u8> {
+        let mut scsi_addr: SCSI_ADDRESS = unsafe { zeroed() };
+        if let Ok(_r) = ioctl(
+            self.handle,
+            IOCTL_SCSI_GET_ADDRESS,
+            Some((null_mut(), 0)),
+            Some((
+                &mut scsi_addr as *mut _ as *mut c_void,
+                size_of_val(&scsi_addr),
+            )),
+        ) {
+            println!(
+                "get_scsi_address: port {} bus {}",
+                scsi_addr.PortNumber, scsi_addr.PathId
+            );
+            Ok(scsi_addr.PathId)
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Error code: {:#08x}", last_error()),
+            ))
+        }
+    }
+
+    pub fn get_cache_information(&self) {
+        let mut cache_info: DISK_CACHE_INFORMATION = unsafe { zeroed() };
+        if let Ok(_r) = ioctl(
+            self.handle,
+            IOCTL_DISK_GET_CACHE_INFORMATION,
+            Some((null_mut(), 0)),
+            Some((
+                &mut cache_info as *mut _ as *mut c_void,
+                size_of_val(&cache_info),
+            )),
+        ) {
+            println!("get_cache_information: {:?}", cache_info.WriteCacheEnabled);
+        }
+    }
+
+    pub fn storage_query_property(&self) {
+        let mut spq: STORAGE_PROPERTY_QUERY = unsafe { zeroed() };
+        spq.PropertyId = StorageDeviceWriteCacheProperty;
+        let mut cache_info: STORAGE_WRITE_CACHE_PROPERTY = unsafe { zeroed() };
+        if let Ok(_r) = ioctl(
+            self.handle,
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            Some((&spq as *const _ as *const c_void, size_of_val(&spq))),
+            Some((
+                &mut cache_info as *mut _ as *mut c_void,
+                size_of_val(&cache_info),
+            )),
+        ) {
+            println!("storage_query_property: {}", cache_info.WriteCacheEnabled);
+        }
+    }
+
+    pub fn storage_set_property(&self) {
+        let mut sps: STORAGE_PROPERTY_SET = unsafe { zeroed() };
+        sps.PropertyId = StorageDeviceWriteCacheProperty;
+        sps.SetType = PropertyStandardSet;
+        let mut cache_info: STORAGE_WRITE_CACHE_PROPERTY = unsafe { zeroed() };
+
+        if let Ok(_r) = ioctl(
+            self.handle,
+            IOCTL_STORAGE_SET_PROPERTY,
+            Some((&sps as *const _ as *const c_void, size_of_val(&sps))),
+            Some((
+                &mut cache_info as *mut _ as *mut c_void,
+                size_of_val(&cache_info),
+            )),
+        ) {
+            println!("storage_set_property: {}", cache_info.WriteCacheEnabled);
+        }
+    }
+
+    pub fn scsi_read(&mut self, offset: u64, buf: &[u8]) -> std::io::Result<usize> {
+        if buf.len() <= 0 {
+            return Ok(0);
+        }
+        let mut len = buf.len() - 1;
+        len += SECTOR_SIZE - (len % SECTOR_SIZE);
+        let lba = offset >> self.lba_shift;
+        let nlb = (len as u32 >> self.lba_shift) - 1;
+        let cdb = ScsiCdb16::new(
+            ScsiOpcode::SCSI_OPCODE_READ_16,
+            lba,
+            nlb,
+            ScsiCdbFlag::SCSI_FL_FUA as u8,
+        );
+        self.request.set_buffer(SCSI_IOCTL_DATA_IN, buf);
+        cdb.encode_as_be_bytes(&mut self.request.sptd.Cdb);
+        self.request.sptd.CdbLength = 16;
+
+        ioctl(
+            self.handle,
+            IOCTL_SCSI_PASS_THROUGH_DIRECT,
+            Some((
+                &self.request as *const _ as *const c_void,
+                size_of_val(&self.request),
+            )),
+            Some((
+                &mut self.request as *mut _ as *mut c_void,
+                size_of_val(&self.request),
+            )),
+        )
+    }
+
+    pub fn scsi_write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if buf.len() <= 0 {
+            return Ok(0);
+        }
+        let mut len = buf.len() - 1;
+        len += SECTOR_SIZE - (len % SECTOR_SIZE);
+        let lba = self.write_offset >> self.lba_shift;
+        let nlb = (len as u32 >> self.lba_shift) - 1;
+        let mut flag = 0;
+        if let Some(fua) = self.fua {
+            flag = (fua as u8) << 3;
+        } else {
+            flag = 0;
+        } 
+        let cdb = ScsiCdb16::new(
+            ScsiOpcode::SCSI_OPCODE_WRITE_16,
+            lba,
+            nlb,
+            flag as u8,
+        );
+        self.request.set_buffer(SCSI_IOCTL_DATA_OUT, buf);
+        cdb.encode_as_be_bytes(&mut self.request.sptd.Cdb);
+        self.request.sptd.CdbLength = 16;
+        let request_ptr: *mut ScsiPassThroughDirectSenseBuffer = &mut self.request;
+
+        let res = ioctl(
+            self.handle,
+            IOCTL_SCSI_PASS_THROUGH_DIRECT,
+            Some((
+                &self.request as *const _ as *const c_void,
+                size_of_val(&self.request),
+            )),
+            Some((
+                request_ptr as *mut c_void,
+                size_of::<ScsiPassThroughDirectSenseBuffer>() as usize,
+            )),
+        );
+        match res {
+            Err(_err) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Error code: {:#08x}", last_error()),
+                ));
+            }
+            Ok(_wb) => {
+                self.write_offset += self.request.sptd.DataTransferLength as u64;
+                return Ok(self.request.sptd.DataTransferLength as usize);
+            }
+        }
+    }
 }
 
 impl Read for Disk {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let mut bytes_read = 0u32;
         let res = unsafe {
-            fs::ReadFile(
+            ReadFile(
                 self.handle,
                 buf.as_mut_ptr() as *mut c_void,
                 buf.len() as u32,
@@ -157,8 +338,8 @@ impl Read for Disk {
             )
         };
         if res == 0 {
-            Err(io::Error::new(
-                io::ErrorKind::Other,
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
                 format!("Error code: {:#08x}", last_error()),
             ))
         } else {
@@ -168,7 +349,7 @@ impl Read for Disk {
 }
 
 impl Write for Disk {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         if buf.len() <= 0 {
             return Ok(0);
         }
@@ -176,17 +357,17 @@ impl Write for Disk {
         len += SECTOR_SIZE - (len % SECTOR_SIZE);
         let mut bytes_write = 0u32;
         let res = unsafe {
-            fs::WriteFile(
+            WriteFile(
                 self.handle,
-                buf.as_ptr() as *const c_void,
+                buf.as_ptr() as *const u8,
                 len as u32,
                 &mut bytes_write,
                 null_mut(),
             )
         };
         if res == 0 {
-            Err(io::Error::new(
-                io::ErrorKind::Other,
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
                 format!("Error code: {:#08x}", last_error()),
             ))
         } else {
@@ -201,3 +382,42 @@ impl Write for Disk {
 
 unsafe impl Send for Disk {}
 unsafe impl Sync for Disk {}
+
+pub fn get_physical_drv_number_from_logical_drv(drive_name: String) -> i32 {
+    let path = format!("\\\\.\\{drive_name}:");
+    let h_device = open(&path, 'r');
+
+    if h_device == INVALID_HANDLE_VALUE {
+        println!("Couldn't open target drive: {}", path,);
+        return -1;
+    }
+
+    let mut st_volume_data: VOLUME_DISK_EXTENTS = unsafe { zeroed() };
+    let pst_volume_data: *mut VOLUME_DISK_EXTENTS = &mut st_volume_data;
+    let b_ret = ioctl(
+        h_device,
+        IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
+        Some((null_mut(), 0)),
+        Some((pst_volume_data as *mut c_void, size_of_val(&st_volume_data))),
+    );
+
+    unsafe { CloseHandle(h_device) };
+
+    match b_ret {
+        Err(_err) => {
+            println!("DeviceIoControl is failed(Err Code: {})", last_error());
+            return -1;
+        }
+        Ok(_ret) => {}
+    }
+
+    if st_volume_data.NumberOfDiskExtents < 1 {
+        println!(
+            "Number of Disk is Invalid ({})",
+            st_volume_data.NumberOfDiskExtents,
+        );
+        return -1;
+    }
+
+    return st_volume_data.Extents[0].DiskNumber as i32;
+}

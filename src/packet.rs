@@ -300,6 +300,7 @@ impl Message {
         }
     }
 
+    #[allow(unused_assignments)]
     pub fn encode(&self) -> Vec<u8> {
         use Message::*;
 
