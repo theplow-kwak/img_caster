@@ -109,7 +109,7 @@ pub struct Disk {
     pub size: usize,
     pub lba_shift: u8,
     write_offset: u64,
-    request: ScsiPassThroughDirectSenseBuffer,
+    request: SCSI_PASS_THROUGH_DIRECT_WITH_BUFFER,
     pub fua: Option<bool>,
 }
 
@@ -143,7 +143,7 @@ impl Disk {
                 size: getfilesize(&handle),
                 lba_shift: 9,
                 write_offset: 0,
-                request: ScsiPassThroughDirectSenseBuffer::new(SCSI_IOCTL_DATA_OUT),
+                request: SCSI_PASS_THROUGH_DIRECT_WITH_BUFFER::new(SCSI_IOCTL_DATA_OUT),
                 fua,
             })
         }
@@ -241,6 +241,31 @@ impl Disk {
         }
     }
 
+    pub fn security_recv(&mut self, protocol: u8, com_id: u16, buf: &[u8]) -> std::io::Result<usize> {
+        let cdb = ScsiSecCdb12::new(
+            ScsiOpcode::SCSI_OPCODE_SECURITY_RECV,
+            protocol,
+            com_id,
+            buf.len() as u32,
+        );
+        self.request.set_buffer(SCSI_IOCTL_DATA_IN, buf);
+        cdb.encode_as_be_bytes(&mut self.request.sptd.Cdb);
+        self.request.sptd.CdbLength = 16;
+
+        ioctl(
+            self.handle,
+            IOCTL_SCSI_PASS_THROUGH_DIRECT,
+            Some((
+                &self.request as *const _ as *const c_void,
+                size_of_val(&self.request),
+            )),
+            Some((
+                &mut self.request as *mut _ as *mut c_void,
+                size_of_val(&self.request),
+            )),
+        )
+    }
+
     pub fn scsi_read(&mut self, offset: u64, buf: &[u8]) -> std::io::Result<usize> {
         if buf.len() <= 0 {
             return Ok(0);
@@ -249,7 +274,7 @@ impl Disk {
         len += SECTOR_SIZE - (len % SECTOR_SIZE);
         let lba = offset >> self.lba_shift;
         let nlb = (len as u32 >> self.lba_shift) - 1;
-        let cdb = ScsiCdb16::new(
+        let cdb = ScsiRwCdb16::new(
             ScsiOpcode::SCSI_OPCODE_READ_16,
             lba,
             nlb,
@@ -273,6 +298,7 @@ impl Disk {
         )
     }
 
+    #[allow(unused_assignments)]
     pub fn scsi_write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         if buf.len() <= 0 {
             return Ok(0);
@@ -287,7 +313,7 @@ impl Disk {
         } else {
             flag = 0;
         } 
-        let cdb = ScsiCdb16::new(
+        let cdb = ScsiRwCdb16::new(
             ScsiOpcode::SCSI_OPCODE_WRITE_16,
             lba,
             nlb,
@@ -296,7 +322,7 @@ impl Disk {
         self.request.set_buffer(SCSI_IOCTL_DATA_OUT, buf);
         cdb.encode_as_be_bytes(&mut self.request.sptd.Cdb);
         self.request.sptd.CdbLength = 16;
-        let request_ptr: *mut ScsiPassThroughDirectSenseBuffer = &mut self.request;
+        let request_ptr: *mut SCSI_PASS_THROUGH_DIRECT_WITH_BUFFER = &mut self.request;
 
         let res = ioctl(
             self.handle,
@@ -307,7 +333,7 @@ impl Disk {
             )),
             Some((
                 request_ptr as *mut c_void,
-                size_of::<ScsiPassThroughDirectSenseBuffer>() as usize,
+                size_of::<SCSI_PASS_THROUGH_DIRECT_WITH_BUFFER>() as usize,
             )),
         );
         match res {
@@ -331,7 +357,7 @@ impl Read for Disk {
         let res = unsafe {
             ReadFile(
                 self.handle,
-                buf.as_mut_ptr() as *mut c_void,
+                buf.as_mut_ptr() as *mut u8,
                 buf.len() as u32,
                 &mut bytes_read,
                 null_mut(),
