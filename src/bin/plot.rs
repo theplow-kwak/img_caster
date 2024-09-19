@@ -1,11 +1,10 @@
-use ndarray::{Array, Ix1, Ix2};
 use plotly::color::NamedColor;
-use plotly::common::Mode;
 use plotly::layout::{
     Axis, Layout, Shape, ShapeLine, ShapeType,
 };
-use plotly::ndarray::ArrayTraces;
-use plotly::{Plot, Scatter};
+use plotly::common::Mode;
+use plotly::{Plot, Scatter, ArrayTraces};
+use ndarray::{Array, Ix1, Ix2};
 
 fn vertical_and_horizontal_lines_positioned_relative_to_axes(show: bool) {
     let trace = Scatter::new(vec![2.0, 3.5, 6.0], vec![1.0, 1.5, 1.0])
@@ -62,35 +61,35 @@ fn vertical_and_horizontal_lines_positioned_relative_to_axes(show: bool) {
     );
 }
 
-fn multiple_ndarray_traces_over_columns(show: bool) {
-    let t: Array<f64, Ix1> = Array::range(0., 10., 5.);
-    let mut ys: Array<f64, Ix2> = Array::zeros((5, 11));
-    let mut count = 0.;
-    for mut row in ys.columns_mut() {
-        for index in 0..row.len() {
-            row[index] = count + (index as f64).powf(3.);
-        }
-        count += 1.;
-    }
-    println!("{}", ys);
+// fn multiple_ndarray_traces_over_columns(show: bool) {
+//     let t: Array<f64, Ix1> = Array::range(0., 10., 5.);
+//     let mut ys: Array<f64, Ix2> = Array::zeros((5, 11));
+//     let mut count = 0.;
+//     for mut row in ys.columns_mut() {
+//         for index in 0..row.len() {
+//             row[index] = count + (index as f64).powf(3.);
+//         }
+//         count += 1.;
+//     }
+//     println!("{}", ys);
 
-    let traces =
-        Scatter::default()
-            .mode(Mode::LinesMarkers)
-            .to_traces(t, ys, ArrayTraces::OverRows);
+//     let traces =
+//         Scatter::default()
+//             .mode(Mode::LinesMarkers)
+//             .to_traces(t, ys, ArrayTraces::OverRows);
 
-    let mut plot = Plot::new();
-    plot.add_traces(traces);
-    if show {
-        plot.show();
-    }
-    println!(
-        "{}",
-        plot.to_inline_html(Some("multiple_ndarray_traces_over_columns"))
-    );
-}
+//     let mut plot = Plot::new();
+//     plot.add_traces(traces);
+//     if show {
+//         plot.show();
+//     }
+//     println!(
+//         "{}",
+//         plot.to_inline_html(Some("multiple_ndarray_traces_over_columns"))
+//     );
+// }
 
 fn main() {
     vertical_and_horizontal_lines_positioned_relative_to_axes(true);
-    multiple_ndarray_traces_over_columns(true);
+    // multiple_ndarray_traces_over_columns(true);
 }

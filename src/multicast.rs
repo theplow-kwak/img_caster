@@ -90,7 +90,7 @@ pub struct MultiCast {
 
 impl MultiCast {
     pub fn receiver(nic: usize, rcvbuf: usize) -> Self {
-        let myip_net = get_ipconfig()[nic]; // get_default_interface(); 
+        let myip_net = get_ipconfig()[nic];
         let myip_addr: SocketAddrV4 = SocketAddrV4::new(myip_net.addr(), PORTBASE);
 
         let broadcast_addr = SocketAddrV4::new(myip_net.broadcast(), PORTBASE + 1);
@@ -116,7 +116,7 @@ impl MultiCast {
     }
 
     pub fn sender(nic: usize) -> Self {
-        let myip_net = get_ipconfig()[nic]; // get_default_interface();
+        let myip_net = get_ipconfig()[nic];
         let myip_addr: SocketAddrV4 = SocketAddrV4::new(myip_net.addr(), PORTBASE + 1);
 
         let broadcast_addr = SocketAddrV4::new(myip_net.broadcast(), PORTBASE);

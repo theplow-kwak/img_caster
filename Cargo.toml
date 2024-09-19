@@ -20,9 +20,11 @@ plotly = { version = ">=0.8.0", features = ["plotly_ndarray"] }
 plotters = "0.3.5"
 ndarray = "0.15"
 memoffset = "0.6.5"
+scanf = "1.2.1"
+sscanf = "0.4"
 
 [dependencies.windows-sys]
-version = "0.52.0"
+version = "0.52"
 features = [
     "Win32_Foundation", "Win32_Security",
     "Win32_Devices_DeviceAndDriverInstallation",
@@ -30,4 +32,5 @@ features = [
     "Win32_System_IO",
     "Win32_System_Ioctl",
     "Win32_Storage_IscsiDisc",
+    "Win32_Devices_Properties",
 ]

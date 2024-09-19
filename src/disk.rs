@@ -9,7 +9,7 @@ use std::{
     ffi::c_void,
     fmt,
     io::{Read, Write},
-    mem::{size_of, size_of_val, zeroed},
+    mem::{size_of_val, zeroed},
     ptr::{null, null_mut},
 };
 
@@ -109,7 +109,7 @@ pub struct Disk {
     pub size: usize,
     pub lba_shift: u8,
     write_offset: u64,
-    request: SCSI_PASS_THROUGH_DIRECT_WITH_BUFFER,
+    sptdwb: SCSI_PASS_THROUGH_DIRECT_WITH_BUFFER,
     pub fua: Option<bool>,
 }
 
@@ -143,7 +143,7 @@ impl Disk {
                 size: getfilesize(&handle),
                 lba_shift: 9,
                 write_offset: 0,
-                request: SCSI_PASS_THROUGH_DIRECT_WITH_BUFFER::new(SCSI_IOCTL_DATA_OUT),
+                sptdwb: SCSI_PASS_THROUGH_DIRECT_WITH_BUFFER::new(SCSI_IOCTL_DATA_OUT),
                 fua,
             })
         }
@@ -222,6 +222,66 @@ impl Disk {
         }
     }
 
+    pub fn scsi_pass_through_direct(&mut self) -> std::io::Result<usize> {
+        ioctl(
+            self.handle,
+            IOCTL_SCSI_PASS_THROUGH_DIRECT,
+            Some((
+                &self.sptdwb as *const _ as *const c_void,
+                size_of_val(&self.sptdwb),
+            )),
+            Some((
+                &mut self.sptdwb as *mut _ as *mut c_void,
+                size_of_val(&self.sptdwb),
+            )),
+        )
+    }
+
+    pub fn security_recv(
+        &mut self,
+        protocol: u8,
+        com_id: u16,
+        buf: &[u8],
+    ) -> std::io::Result<usize> {
+        let cdb = ScsiSecCdb12::new(
+            ScsiOpcode::SCSI_OPCODE_SECURITY_RECV,
+            protocol,
+            com_id,
+            buf.len() as u32,
+        );
+        self.sptdwb.set_buffer(SCSI_IOCTL_DATA_IN, buf);
+        cdb.encode_as_be_bytes(&mut self.sptdwb.sptd.Cdb);
+        self.sptdwb.sptd.CdbLength = 12;
+
+        self.scsi_pass_through_direct()
+    }
+
+    pub fn security_send(
+        &mut self,
+        protocol: u8,
+        com_id: u16,
+        buf: &[u8],
+    ) -> std::io::Result<usize> {
+        let cdb = ScsiSecCdb12::new(
+            ScsiOpcode::SCSI_OPCODE_SECURITY_SEND,
+            protocol,
+            com_id,
+            buf.len() as u32,
+        );
+        self.sptdwb.set_buffer(SCSI_IOCTL_DATA_OUT, buf);
+        cdb.encode_as_be_bytes(&mut self.sptdwb.sptd.Cdb);
+        self.sptdwb.sptd.CdbLength = 12;
+
+        self.scsi_pass_through_direct()
+    }
+
+    pub fn discovery0(&mut self) -> std::io::Result<usize> {
+        let buff = Box::new(vec![0x0u8; 4096]);
+        let res = self.security_recv(0x01, 0x0001, &buff);
+        println!("discovery0 {:?}", &buff[..512]);
+        res
+    }
+
     pub fn storage_set_property(&self) {
         let mut sps: STORAGE_PROPERTY_SET = unsafe { zeroed() };
         sps.PropertyId = StorageDeviceWriteCacheProperty;
@@ -241,31 +301,6 @@ impl Disk {
         }
     }
 
-    pub fn security_recv(&mut self, protocol: u8, com_id: u16, buf: &[u8]) -> std::io::Result<usize> {
-        let cdb = ScsiSecCdb12::new(
-            ScsiOpcode::SCSI_OPCODE_SECURITY_RECV,
-            protocol,
-            com_id,
-            buf.len() as u32,
-        );
-        self.request.set_buffer(SCSI_IOCTL_DATA_IN, buf);
-        cdb.encode_as_be_bytes(&mut self.request.sptd.Cdb);
-        self.request.sptd.CdbLength = 16;
-
-        ioctl(
-            self.handle,
-            IOCTL_SCSI_PASS_THROUGH_DIRECT,
-            Some((
-                &self.request as *const _ as *const c_void,
-                size_of_val(&self.request),
-            )),
-            Some((
-                &mut self.request as *mut _ as *mut c_void,
-                size_of_val(&self.request),
-            )),
-        )
-    }
-
     pub fn scsi_read(&mut self, offset: u64, buf: &[u8]) -> std::io::Result<usize> {
         if buf.len() <= 0 {
             return Ok(0);
@@ -274,28 +309,12 @@ impl Disk {
         len += SECTOR_SIZE - (len % SECTOR_SIZE);
         let lba = offset >> self.lba_shift;
         let nlb = (len as u32 >> self.lba_shift) - 1;
-        let cdb = ScsiRwCdb16::new(
-            ScsiOpcode::SCSI_OPCODE_READ_16,
-            lba,
-            nlb,
-            ScsiCdbFlag::SCSI_FL_FUA as u8,
-        );
-        self.request.set_buffer(SCSI_IOCTL_DATA_IN, buf);
-        cdb.encode_as_be_bytes(&mut self.request.sptd.Cdb);
-        self.request.sptd.CdbLength = 16;
+        let cdb = ScsiRwCdb16::new(ScsiOpcode::SCSI_OPCODE_READ_16, lba, nlb, 0);
+        self.sptdwb.set_buffer(SCSI_IOCTL_DATA_IN, buf);
+        cdb.encode_as_be_bytes(&mut self.sptdwb.sptd.Cdb);
+        self.sptdwb.sptd.CdbLength = 16;
 
-        ioctl(
-            self.handle,
-            IOCTL_SCSI_PASS_THROUGH_DIRECT,
-            Some((
-                &self.request as *const _ as *const c_void,
-                size_of_val(&self.request),
-            )),
-            Some((
-                &mut self.request as *mut _ as *mut c_void,
-                size_of_val(&self.request),
-            )),
-        )
+        self.scsi_pass_through_direct()
     }
 
     #[allow(unused_assignments)]
@@ -310,42 +329,21 @@ impl Disk {
         let mut flag = 0;
         if let Some(fua) = self.fua {
             flag = (fua as u8) << 3;
-        } else {
-            flag = 0;
-        } 
-        let cdb = ScsiRwCdb16::new(
-            ScsiOpcode::SCSI_OPCODE_WRITE_16,
-            lba,
-            nlb,
-            flag as u8,
-        );
-        self.request.set_buffer(SCSI_IOCTL_DATA_OUT, buf);
-        cdb.encode_as_be_bytes(&mut self.request.sptd.Cdb);
-        self.request.sptd.CdbLength = 16;
-        let request_ptr: *mut SCSI_PASS_THROUGH_DIRECT_WITH_BUFFER = &mut self.request;
+        }
+        let cdb = ScsiRwCdb16::new(ScsiOpcode::SCSI_OPCODE_WRITE_16, lba, nlb, flag as u8);
+        self.sptdwb.set_buffer(SCSI_IOCTL_DATA_OUT, buf);
+        cdb.encode_as_be_bytes(&mut self.sptdwb.sptd.Cdb);
+        self.sptdwb.sptd.CdbLength = 16;
 
-        let res = ioctl(
-            self.handle,
-            IOCTL_SCSI_PASS_THROUGH_DIRECT,
-            Some((
-                &self.request as *const _ as *const c_void,
-                size_of_val(&self.request),
-            )),
-            Some((
-                request_ptr as *mut c_void,
-                size_of::<SCSI_PASS_THROUGH_DIRECT_WITH_BUFFER>() as usize,
-            )),
-        );
+        let res = self.scsi_pass_through_direct();
         match res {
-            Err(_err) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("Error code: {:#08x}", last_error()),
-                ));
-            }
+            Err(_err) => Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Error code: {:#08x}", last_error()),
+            )),
             Ok(_wb) => {
-                self.write_offset += self.request.sptd.DataTransferLength as u64;
-                return Ok(self.request.sptd.DataTransferLength as usize);
+                self.write_offset += self.sptdwb.sptd.DataTransferLength as u64;
+                Ok(self.sptdwb.sptd.DataTransferLength as usize)
             }
         }
     }
@@ -419,12 +417,14 @@ pub fn get_physical_drv_number_from_logical_drv(drive_name: String) -> i32 {
     }
 
     let mut st_volume_data: VOLUME_DISK_EXTENTS = unsafe { zeroed() };
-    let pst_volume_data: *mut VOLUME_DISK_EXTENTS = &mut st_volume_data;
     let b_ret = ioctl(
         h_device,
         IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
         Some((null_mut(), 0)),
-        Some((pst_volume_data as *mut c_void, size_of_val(&st_volume_data))),
+        Some((
+            &mut st_volume_data as *mut _ as *mut c_void,
+            size_of_val(&st_volume_data),
+        )),
     );
 
     unsafe { CloseHandle(h_device) };
@@ -445,5 +445,5 @@ pub fn get_physical_drv_number_from_logical_drv(drive_name: String) -> i32 {
         return -1;
     }
 
-    return st_volume_data.Extents[0].DiskNumber as i32;
+    st_volume_data.Extents[0].DiskNumber as i32
 }

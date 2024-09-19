@@ -61,7 +61,6 @@ impl SCSI_PASS_THROUGH_DIRECT_WITH_BUFFER {
             },
             Filler: 0,
             ucSenseBuf: Default::default(),
-            // data: ScsiDataBuffer(data_src.to_vec()),
         }
     }
 
@@ -140,18 +139,16 @@ impl ScsiRwCdb16 {
 
 #[repr(C)]
 #[derive(Debug, Default, Clone, Copy, PackedSize, EncodeBE, DecodeBE)]
-#[allow(non_camel_case_types, non_snake_case, unused_assignments)]
 pub struct ScsiSecCdb12 {
     pub opcode: u8,
     pub protocol: u8,
-    pub rsv1: u16,
     pub com_id: u16,
+    pub reserved: u16,
     pub len: u32,
-    pub rsv2: u8,
+    pub reserved2: u8,
     pub control: u8,
 }
 
-#[allow(non_camel_case_types, non_snake_case, unused_assignments)]
 impl ScsiSecCdb12 {
     pub fn new(opcode: ScsiOpcode, protocol: u8, com_id: u16, len: u32) -> Self {
         Self {
@@ -163,4 +160,3 @@ impl ScsiSecCdb12 {
         }
     }
 }
-
