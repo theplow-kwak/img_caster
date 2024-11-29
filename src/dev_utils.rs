@@ -14,80 +14,6 @@ use windows_sys::{
     },
 };
 
-pub fn enum_dev() {
-    unsafe {
-        let guid: *const GUID = &GUID_DEVINTERFACE_STORAGEPORT;
-        let h_dev_info: HDEVINFO = SetupDiGetClassDevsA(
-            guid,
-            null_mut(),
-            0 as HWND,
-            DIGCF_PRESENT | DIGCF_DEVICEINTERFACE,
-        );
-
-        if h_dev_info == INVALID_HANDLE_VALUE {
-            println!("SetupDiGetClassDevs failed");
-            return;
-        }
-
-        let mut device_info_data: SP_DEVINFO_DATA = zeroed();
-        let mut device_interface_data: SP_DEVICE_INTERFACE_DATA = zeroed();
-        device_info_data.cbSize = size_of::<SP_DEVINFO_DATA>() as u32;
-        device_interface_data.cbSize = size_of::<SP_DEVICE_INTERFACE_DATA>() as u32;
-
-        let mut index: u32 = 0;
-        let mut device_id: Vec<u8> = vec![0; 1024];
-        let device_interface_detail_data: *mut SP_DEVICE_INTERFACE_DETAIL_DATA_A =
-            device_id.as_mut_ptr() as *mut SP_DEVICE_INTERFACE_DETAIL_DATA_A;
-        (*device_interface_detail_data).cbSize =
-            size_of::<SP_DEVICE_INTERFACE_DETAIL_DATA_A>() as u32;
-
-        while SetupDiEnumDeviceInterfaces(
-            h_dev_info,
-            null_mut(),
-            guid,
-            index,
-            &mut device_interface_data,
-        ) != 0
-        {
-            if SetupDiGetDeviceInterfaceDetailA(
-                h_dev_info,
-                &mut device_interface_data,
-                device_interface_detail_data,
-                1024,
-                null_mut(),
-                &mut device_info_data,
-            ) != 0
-            {
-                let device_path = std::ffi::CStr::from_ptr(
-                    (*device_interface_detail_data).DevicePath.as_ptr() as *const i8,
-                )
-                .to_string_lossy();
-
-                println!("enum Device path: {:?}", device_path);
-                get_dev_inst_interfaces(device_info_data.DevInst).unwrap();
-
-                let mut parent = std::mem::zeroed();
-                if CM_Get_Parent(&mut parent, device_info_data.DevInst, 0) == CR_SUCCESS {
-                    let mut device_id_parent: Vec<u8> = vec![0; 1000];
-                    if CM_Get_Device_IDA(parent, device_id_parent.as_mut_ptr() as *mut u8, 1000, 0)
-                        == CR_SUCCESS
-                    {
-                        let device_id_parent_str =
-                            std::ffi::CStr::from_ptr(device_id_parent.as_ptr() as *const i8)
-                                .to_string_lossy();
-                        println!("Parent Device ID: {}", device_id_parent_str);
-                        get_dev_inst_interfaces(parent).unwrap();
-                    }
-                }
-            }
-
-            index += 1;
-        }
-
-        SetupDiDestroyDeviceInfoList(h_dev_info);
-    }
-}
-
 pub fn get_dev_inst_interfaces(devinst: u32) -> Result<Box<str>, &'static str> {
     unsafe {
         let mut device_id: Vec<u8> = vec![0; 1000];
@@ -336,6 +262,104 @@ pub fn get_drives_dev_inst_by_bus_number(bus_number: i32) -> Result<Box<str>, &'
     }
 }
 
+// Function to retrieve a device property
+fn get_device_property(devinst: u32, property_key: *const DEVPROPKEY) -> Option<String> {
+    unsafe {
+        let mut buffer: Vec<u16> = vec![0; 260];
+        let mut buffer_len: u32 = buffer.len() as u32;
+        let mut property_type: u32 = 0; // assuming propertytype is a u32 (adjust if needed)
+
+        if CM_Get_DevNode_PropertyW(
+            devinst,
+            property_key,
+            &mut property_type,
+            buffer.as_mut_ptr() as *mut u8,
+            &mut buffer_len,
+            0,
+        ) == CR_SUCCESS
+        {
+            let trimed: Vec<u16> = buffer.into_iter().take_while(|&c| c != 0).collect();
+            Some(String::from_utf16_lossy(&trimed))
+        } else {
+            None
+        }
+    }
+}
+
+pub fn enum_dev_disk() {
+    unsafe {
+        let guid: *const GUID = &GUID_DEVINTERFACE_STORAGEPORT;
+        let h_dev_info: HDEVINFO = SetupDiGetClassDevsA(
+            guid,
+            null_mut(),
+            0 as HWND,
+            DIGCF_PRESENT | DIGCF_DEVICEINTERFACE,
+        );
+
+        if h_dev_info == INVALID_HANDLE_VALUE {
+            println!("SetupDiGetClassDevs failed");
+            return;
+        }
+
+        let mut device_info_data: SP_DEVINFO_DATA = zeroed();
+        let mut device_interface_data: SP_DEVICE_INTERFACE_DATA = zeroed();
+        device_info_data.cbSize = size_of::<SP_DEVINFO_DATA>() as u32;
+        device_interface_data.cbSize = size_of::<SP_DEVICE_INTERFACE_DATA>() as u32;
+
+        let mut index: u32 = 0;
+        let mut device_id: Vec<u8> = vec![0; 1024];
+        let device_interface_detail_data: *mut SP_DEVICE_INTERFACE_DETAIL_DATA_A =
+            device_id.as_mut_ptr() as *mut SP_DEVICE_INTERFACE_DETAIL_DATA_A;
+        (*device_interface_detail_data).cbSize =
+            size_of::<SP_DEVICE_INTERFACE_DETAIL_DATA_A>() as u32;
+
+        while SetupDiEnumDeviceInterfaces(
+            h_dev_info,
+            null_mut(),
+            guid,
+            index,
+            &mut device_interface_data,
+        ) != 0
+        {
+            if SetupDiGetDeviceInterfaceDetailA(
+                h_dev_info,
+                &mut device_interface_data,
+                device_interface_detail_data,
+                1024,
+                null_mut(),
+                &mut device_info_data,
+            ) != 0
+            {
+                let device_path = std::ffi::CStr::from_ptr(
+                    (*device_interface_detail_data).DevicePath.as_ptr() as *const i8,
+                )
+                .to_string_lossy();
+
+                println!("enum Device path: {:?}", device_path);
+                get_dev_inst_interfaces(device_info_data.DevInst).unwrap();
+
+                let mut parent = std::mem::zeroed();
+                if CM_Get_Parent(&mut parent, device_info_data.DevInst, 0) == CR_SUCCESS {
+                    let mut device_id_parent: Vec<u8> = vec![0; 1000];
+                    if CM_Get_Device_IDA(parent, device_id_parent.as_mut_ptr() as *mut u8, 1000, 0)
+                        == CR_SUCCESS
+                    {
+                        let device_id_parent_str =
+                            std::ffi::CStr::from_ptr(device_id_parent.as_ptr() as *const i8)
+                                .to_string_lossy();
+                        println!("Parent Device ID: {}", device_id_parent_str);
+                        get_dev_inst_interfaces(parent).unwrap();
+                    }
+                }
+            }
+
+            index += 1;
+        }
+
+        SetupDiDestroyDeviceInfoList(h_dev_info);
+    }
+}
+
 pub fn enum_dev_interfaces() -> Result<Box<str>, &'static str> {
     unsafe {
         let guid: *const GUID = &GUID_DEVINTERFACE_STORAGEPORT;
@@ -375,45 +399,53 @@ pub fn enum_dev_interfaces() -> Result<Box<str>, &'static str> {
             // println!("{} {:?}", devinst, iface_list_str);
             let mut current_device: Vec<u16> = vec![0; 1000];
             let mut device_id_size: u32 = 1000;
-            let cr = CM_Get_Device_Interface_PropertyW(
+            if CM_Get_Device_Interface_PropertyW(
                 interface.as_ptr(),
                 &DEVPKEY_Device_InstanceId,
                 &mut propertytype,
                 current_device.as_mut_ptr() as *mut u8,
                 &mut device_id_size,
                 0,
-            );
-            if cr != CR_SUCCESS {
+            ) != CR_SUCCESS
+            {
                 continue;
             }
             if propertytype != DEVPROP_TYPE_STRING {
                 continue;
             }
 
-            let cr = CM_Locate_DevNodeW(
+            if CM_Locate_DevNodeW(
                 &mut devinst,
                 current_device.as_ptr(),
                 CM_LOCATE_DEVNODE_NORMAL,
-            );
-            if cr != CR_SUCCESS {
+            ) != CR_SUCCESS
+            {
                 continue;
             }
 
-            let mut buffer: Vec<u16> = vec![0; 260];
-            let mut buffer_len: u32 = buffer.len() as u32;
-            let cr = CM_Get_DevNode_PropertyW(
-                devinst,
-                &DEVPKEY_Device_LocationInfo,
-                &mut propertytype,
-                buffer.as_mut_ptr() as *mut u8,
-                &mut buffer_len,
-                0,
-            );
-            if cr != CR_SUCCESS {
+            let mut status: u32 = 0;
+            let mut problem: u32 = 0;
+            if CM_Get_DevNode_Status(&mut status, &mut problem, devinst, 0) != CR_SUCCESS {
                 continue;
             }
-            let strip = buffer.split(|&num| num == 0).next().unwrap();
-            let location_info = String::from_utf16_lossy(strip);
+
+            if let Some(service) = get_device_property(devinst, &DEVPKEY_Device_Service) {
+                if service != "stornvme" {
+                    continue;
+                }
+            }
+
+            let instance_path = get_device_property(devinst, &DEVPKEY_Device_InstanceId);
+            if instance_path.is_none() {
+                continue;
+            }
+            let instance_path = instance_path.unwrap();
+
+            let location_info = get_device_property(devinst, &DEVPKEY_Device_LocationInfo);
+            if location_info.is_none() {
+                continue;
+            }
+            let location_info = location_info.unwrap();
             let bdf = sscanf::sscanf!(location_info, "PCI bus {i32}, device {i32}, function {i32}")
                 .unwrap_or((0, 0, 0));
 
@@ -423,10 +455,86 @@ pub fn enum_dev_interfaces() -> Result<Box<str>, &'static str> {
                 iface_list_str,
                 String::from_utf16_lossy(&current_device),
                 bdf,
-                location_info
+                instance_path
             );
+            while let Some(dev_inst) = get_child_devices(h_devinst, &mut h_devinst_next) {
+                let mut status: u32 = 0;
+                let mut problem: u32 = 0;
+        
+                let cr: CONFIGRET = unsafe { CM_Get_DevNode_Status(&mut status, &mut problem, dev_inst, 0) };
+                if cr != CR_SUCCESS {
+                    continue; // 상태 조회 실패 시 다음으로 넘어감
+                }
+        
+                let child_disk = by_inst(dev_inst); // 사용자 정의 함수
+                if let Some(disk) = child_disk {
+                    nc.phy_disks.push((dev_inst, Some(disk)));
+                } else {
+                    nc.phy_disks.push((dev_inst, Some(&null_disk)));
+                }
+            }
+            // while (GetChildDevicese(hDevinst, hDevinstNext))
+            // {
+            //     cr = CM_Get_DevNode_Status(&status, &problem, hDevinstNext, 0);
+            //     if (cr != CR_SUCCESS)
+            //         continue;
+            //     child_disk = byInst(hDevinstNext);
+            //     if (child_disk)
+            //         NC.phyDisks.push_back(std::make_pair(hDevinstNext, child_disk));
+            //     else
+            //         NC.phyDisks.push_back(std::make_pair(hDevinstNext, &null_disk));
+            // }
+    
         }
 
         return Ok("f".into());
     }
 }
+
+fn get_child_devices(dev_inst: DEVINST, dev_inst_next: &mut Option<DEVINST>) -> Option<DEVINST> {
+    let mut temp_inst: DEVINST = 0;
+
+    if dev_inst_next.is_none() {
+        let cr: CONFIGRET = unsafe { CM_Get_Child(&mut temp_inst, dev_inst, 0) };
+        if cr == CR_SUCCESS {
+            *dev_inst_next = Some(temp_inst);
+            return Some(temp_inst);
+        }
+    } else {
+        if let Some(dev_inst_next_val) = dev_inst_next {
+            let cr: CONFIGRET = unsafe { CM_Get_Sibling(&mut temp_inst, *dev_inst_next_val, 0) };
+            if cr == CR_SUCCESS {
+                *dev_inst_next = Some(temp_inst);
+                return Some(temp_inst);
+            }
+        }
+    }
+    None
+}
+
+// DEVINST GetChildDevicese(DEVINST devInst, DEVINST &devInstNext)
+// {
+// 	DEVINST tempInst;
+// 	CONFIGRET cr = CR_SUCCESS;
+
+// 	if (!devInstNext)
+// 	{
+// 		cr = CM_Get_Child(&tempInst, devInst, 0);
+// 		if (cr == CR_SUCCESS)
+// 		{
+// 			devInstNext = tempInst;
+// 			return devInstNext;
+// 		}
+// 	}
+// 	else
+// 	{
+// 		cr = CM_Get_Sibling(&tempInst, devInstNext, 0);
+// 		if (cr == CR_SUCCESS)
+// 		{
+// 			devInstNext = tempInst;
+// 			return devInstNext;
+// 		}
+// 	}
+// 	return 0;
+// }
+
