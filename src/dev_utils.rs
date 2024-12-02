@@ -262,6 +262,64 @@ pub fn get_drives_dev_inst_by_bus_number(bus_number: i32) -> Result<Box<str>, &'
     }
 }
 
+#[derive(Debug)]
+struct PciBdf {
+    bus: i32,
+    device: i32,
+    function: i32,
+}
+
+impl PciBdf {
+    pub fn parse(location_info: &str) -> Option<Self> {
+        sscanf::sscanf!(location_info, "PCI bus {i32}, device {i32}, function {i32}")
+            .ok()
+            .map(|(bus, device, function)| Self {
+                bus,
+                device,
+                function,
+            })
+    }
+}
+
+#[derive(Debug)]
+pub struct PhysicalDisk {
+    name: String,
+    devinst: u32,
+    nsid: i32,
+}
+
+impl PhysicalDisk {
+    /// 예시 데이터를 기반으로 PhysicalDisk를 생성
+    pub fn new(name: &str, devinst: u32) -> Self {
+        Self {
+            name: name.to_string(),
+            devinst,
+            nsid: -1,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct DeviceInfo {
+    devinst: u32,
+    bdf: PciBdf,
+    disks: Option<Vec<PhysicalDisk>>,
+}
+
+impl DeviceInfo {
+    pub fn from_device(devinst: u32, location_info: &str) -> Option<Self> {
+        PciBdf::parse(location_info).map(|bdf| Self {
+            devinst,
+            bdf,
+            disks: None,
+        })
+    }
+
+    pub fn add_disks(&mut self, disks: Vec<PhysicalDisk>) {
+        self.disks = Some(disks);
+    }
+}
+
 // Function to retrieve a device property
 fn get_device_property(devinst: u32, property_key: *const DEVPROPKEY) -> Option<String> {
     unsafe {
@@ -283,6 +341,129 @@ fn get_device_property(devinst: u32, property_key: *const DEVPROPKEY) -> Option<
         } else {
             None
         }
+    }
+}
+
+fn get_child_devices(dev_inst: u32, dev_inst_next: &mut Option<u32>) -> Option<u32> {
+    let mut temp_inst: u32 = 0;
+
+    if dev_inst_next.is_none() {
+        let cr: CONFIGRET = unsafe { CM_Get_Child(&mut temp_inst, dev_inst, 0) };
+        if cr == CR_SUCCESS {
+            *dev_inst_next = Some(temp_inst);
+            return Some(temp_inst);
+        }
+    } else {
+        if let Some(dev_inst_next_val) = dev_inst_next {
+            let cr: CONFIGRET = unsafe { CM_Get_Sibling(&mut temp_inst, *dev_inst_next_val, 0) };
+            if cr == CR_SUCCESS {
+                *dev_inst_next = Some(temp_inst);
+                return Some(temp_inst);
+            }
+        }
+    }
+    None
+}
+
+pub fn enum_dev_interfaces() -> Result<Box<str>, &'static str> {
+    unsafe {
+        let guid: *const GUID = &GUID_DEVINTERFACE_STORAGEPORT;
+        let mut iface_list_size: u32 = 0;
+        if CM_Get_Device_Interface_List_SizeW(
+            &mut iface_list_size,
+            guid,
+            null_mut(),
+            CM_GET_DEVICE_INTERFACE_LIST_PRESENT,
+        ) != CR_SUCCESS
+        {
+            return Err("CM_Get_Device_Interface_List_SizeA fail");
+        }
+
+        let mut iface_list: Vec<u16> = vec![0; iface_list_size as usize];
+        if CM_Get_Device_Interface_ListW(
+            guid,
+            null_mut(),
+            iface_list.as_mut_ptr() as *mut u16,
+            iface_list_size,
+            CM_GET_DEVICE_INTERFACE_LIST_PRESENT,
+        ) != CR_SUCCESS
+        {
+            return Err("CM_Get_Device_Interface_ListA fail");
+        }
+
+        println!("GetDevInstInterfaces {:?}:", iface_list_size);
+        let interfaces: Vec<_> = iface_list
+            .split(|&e| e == 0x0)
+            .filter(|v| !v.is_empty())
+            .collect();
+
+        let mut devinst = 0;
+        let mut devinst_next: Option<u32> = None;
+        let mut propertytype: DEVPROPTYPE = 0;
+        for interface in interfaces {
+            let iface_list_str = String::from_utf16_lossy(interface);
+            // println!("{} {:?}", devinst, iface_list_str);
+            let mut current_device: Vec<u16> = vec![0; 1000];
+            let mut device_id_size: u32 = 1000;
+            if CM_Get_Device_Interface_PropertyW(
+                interface.as_ptr(),
+                &DEVPKEY_Device_InstanceId,
+                &mut propertytype,
+                current_device.as_mut_ptr() as *mut u8,
+                &mut device_id_size,
+                0,
+            ) != CR_SUCCESS
+            {
+                continue;
+            }
+            if propertytype != DEVPROP_TYPE_STRING {
+                continue;
+            }
+
+            if CM_Locate_DevNodeW(
+                &mut devinst,
+                current_device.as_ptr(),
+                CM_LOCATE_DEVNODE_NORMAL,
+            ) != CR_SUCCESS
+            {
+                continue;
+            }
+
+            let mut status: u32 = 0;
+            let mut problem: u32 = 0;
+            if CM_Get_DevNode_Status(&mut status, &mut problem, devinst, 0) != CR_SUCCESS {
+                continue;
+            }
+
+            if let Some(service) = get_device_property(devinst, &DEVPKEY_Device_Service) {
+                if service != "stornvme" {
+                    continue;
+                }
+            }
+
+            let location_info = get_device_property(devinst, &DEVPKEY_Device_LocationInfo);
+            if location_info.is_none() {
+                continue;
+            }
+            let location_info = location_info.unwrap();
+            if let Some(mut device_info) = DeviceInfo::from_device(devinst, &location_info) {
+                while let Some(dev_inst) = get_child_devices(devinst, &mut devinst_next) {
+                    let mut status: u32 = 0;
+                    let mut problem: u32 = 0;
+                    if CM_Get_DevNode_Status(&mut status, &mut problem, dev_inst, 0) != CR_SUCCESS {
+                        continue;
+                    }
+
+                    if let Some(instance_path) =
+                        get_device_property(dev_inst, &DEVPKEY_Device_InstanceId)
+                    {
+                        println!("  -> {}", instance_path.split('&').last().unwrap());
+                    }
+                }
+            }
+        }
+
+        return Ok("f".into());
     }
 }
 
@@ -359,182 +540,3 @@ pub fn enum_dev_disk() {
         SetupDiDestroyDeviceInfoList(h_dev_info);
     }
 }
-
-pub fn enum_dev_interfaces() -> Result<Box<str>, &'static str> {
-    unsafe {
-        let guid: *const GUID = &GUID_DEVINTERFACE_STORAGEPORT;
-        let mut iface_list_size: u32 = 0;
-        if CM_Get_Device_Interface_List_SizeW(
-            &mut iface_list_size,
-            guid,
-            null_mut(),
-            CM_GET_DEVICE_INTERFACE_LIST_PRESENT,
-        ) != CR_SUCCESS
-        {
-            return Err("CM_Get_Device_Interface_List_SizeA fail");
-        }
-
-        let mut iface_list: Vec<u16> = vec![0; iface_list_size as usize];
-        if CM_Get_Device_Interface_ListW(
-            guid,
-            null_mut(),
-            iface_list.as_mut_ptr() as *mut u16,
-            iface_list_size,
-            CM_GET_DEVICE_INTERFACE_LIST_PRESENT,
-        ) != CR_SUCCESS
-        {
-            return Err("CM_Get_Device_Interface_ListA fail");
-        }
-
-        println!("GetDevInstInterfaces {:?}:", iface_list_size);
-        let interfaces: Vec<_> = iface_list
-            .split(|&e| e == 0x0)
-            .filter(|v| !v.is_empty())
-            .collect();
-
-        let mut devinst = 0;
-        let mut propertytype: DEVPROPTYPE = 0;
-        for interface in interfaces {
-            let iface_list_str = String::from_utf16_lossy(interface);
-            // println!("{} {:?}", devinst, iface_list_str);
-            let mut current_device: Vec<u16> = vec![0; 1000];
-            let mut device_id_size: u32 = 1000;
-            if CM_Get_Device_Interface_PropertyW(
-                interface.as_ptr(),
-                &DEVPKEY_Device_InstanceId,
-                &mut propertytype,
-                current_device.as_mut_ptr() as *mut u8,
-                &mut device_id_size,
-                0,
-            ) != CR_SUCCESS
-            {
-                continue;
-            }
-            if propertytype != DEVPROP_TYPE_STRING {
-                continue;
-            }
-
-            if CM_Locate_DevNodeW(
-                &mut devinst,
-                current_device.as_ptr(),
-                CM_LOCATE_DEVNODE_NORMAL,
-            ) != CR_SUCCESS
-            {
-                continue;
-            }
-
-            let mut status: u32 = 0;
-            let mut problem: u32 = 0;
-            if CM_Get_DevNode_Status(&mut status, &mut problem, devinst, 0) != CR_SUCCESS {
-                continue;
-            }
-
-            if let Some(service) = get_device_property(devinst, &DEVPKEY_Device_Service) {
-                if service != "stornvme" {
-                    continue;
-                }
-            }
-
-            let instance_path = get_device_property(devinst, &DEVPKEY_Device_InstanceId);
-            if instance_path.is_none() {
-                continue;
-            }
-            let instance_path = instance_path.unwrap();
-
-            let location_info = get_device_property(devinst, &DEVPKEY_Device_LocationInfo);
-            if location_info.is_none() {
-                continue;
-            }
-            let location_info = location_info.unwrap();
-            let bdf = sscanf::sscanf!(location_info, "PCI bus {i32}, device {i32}, function {i32}")
-                .unwrap_or((0, 0, 0));
-
-            println!(
-                "{} {}\n    {} - {:?}\n    {}",
-                devinst,
-                iface_list_str,
-                String::from_utf16_lossy(&current_device),
-                bdf,
-                instance_path
-            );
-            while let Some(dev_inst) = get_child_devices(h_devinst, &mut h_devinst_next) {
-                let mut status: u32 = 0;
-                let mut problem: u32 = 0;
-        
-                let cr: CONFIGRET = unsafe { CM_Get_DevNode_Status(&mut status, &mut problem, dev_inst, 0) };
-                if cr != CR_SUCCESS {
-                    continue; // 상태 조회 실패 시 다음으로 넘어감
-                }
-        
-                let child_disk = by_inst(dev_inst); // 사용자 정의 함수
-                if let Some(disk) = child_disk {
-                    nc.phy_disks.push((dev_inst, Some(disk)));
-                } else {
-                    nc.phy_disks.push((dev_inst, Some(&null_disk)));
-                }
-            }
-            // while (GetChildDevicese(hDevinst, hDevinstNext))
-            // {
-            //     cr = CM_Get_DevNode_Status(&status, &problem, hDevinstNext, 0);
-            //     if (cr != CR_SUCCESS)
-            //         continue;
-            //     child_disk = byInst(hDevinstNext);
-            //     if (child_disk)
-            //         NC.phyDisks.push_back(std::make_pair(hDevinstNext, child_disk));
-            //     else
-            //         NC.phyDisks.push_back(std::make_pair(hDevinstNext, &null_disk));
-            // }
-    
-        }
-
-        return Ok("f".into());
-    }
-}
-
-fn get_child_devices(dev_inst: DEVINST, dev_inst_next: &mut Option<DEVINST>) -> Option<DEVINST> {
-    let mut temp_inst: DEVINST = 0;
-
-    if dev_inst_next.is_none() {
-        let cr: CONFIGRET = unsafe { CM_Get_Child(&mut temp_inst, dev_inst, 0) };
-        if cr == CR_SUCCESS {
-            *dev_inst_next = Some(temp_inst);
-            return Some(temp_inst);
-        }
-    } else {
-        if let Some(dev_inst_next_val) = dev_inst_next {
-            let cr: CONFIGRET = unsafe { CM_Get_Sibling(&mut temp_inst, *dev_inst_next_val, 0) };
-            if cr == CR_SUCCESS {
-                *dev_inst_next = Some(temp_inst);
-                return Some(temp_inst);
-            }
-        }
-    }
-    None
-}
-
-// DEVINST GetChildDevicese(DEVINST devInst, DEVINST &devInstNext)
-// {
-// 	DEVINST tempInst;
-// 	CONFIGRET cr = CR_SUCCESS;
-
-// 	if (!devInstNext)
-// 	{
-// 		cr = CM_Get_Child(&tempInst, devInst, 0);
-// 		if (cr == CR_SUCCESS)
-// 		{
-// 			devInstNext = tempInst;
-// 			return devInstNext;
-// 		}
-// 	}
-// 	else
-// 	{
-// 		cr = CM_Get_Sibling(&tempInst, devInstNext, 0);
-// 		if (cr == CR_SUCCESS)
-// 		{
-// 			devInstNext = tempInst;
-// 			return devInstNext;
-// 		}
-// 	}
-// 	return 0;
-// }
-

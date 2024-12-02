@@ -3,8 +3,7 @@ use plotly::layout::{
     Axis, Layout, Shape, ShapeLine, ShapeType,
 };
 use plotly::common::Mode;
-use plotly::{Plot, Scatter, ArrayTraces};
-use ndarray::{Array, Ix1, Ix2};
+use plotly::{Plot, Scatter};
 
 fn vertical_and_horizontal_lines_positioned_relative_to_axes(show: bool) {
     let trace = Scatter::new(vec![2.0, 3.5, 6.0], vec![1.0, 1.5, 1.0])
