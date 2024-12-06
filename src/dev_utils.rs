@@ -2,6 +2,7 @@ use crate::disk::{ioctl, last_error, open};
 use sscanf;
 use std::{
     ffi::c_void,
+    fmt,
     mem::{size_of, size_of_val, zeroed},
     ptr::null_mut,
 };
@@ -262,8 +263,9 @@ pub fn get_drives_dev_inst_by_bus_number(bus_number: i32) -> Result<Box<str>, &'
     }
 }
 
-#[derive(Debug)]
+#[derive(Default)]
 struct PciBdf {
+    segment: i32,
     bus: i32,
     device: i32,
     function: i32,
@@ -274,6 +276,7 @@ impl PciBdf {
         sscanf::sscanf!(location_info, "PCI bus {i32}, device {i32}, function {i32}")
             .ok()
             .map(|(bus, device, function)| Self {
+                segment: 0,
                 bus,
                 device,
                 function,
@@ -281,66 +284,207 @@ impl PciBdf {
     }
 }
 
+impl PartialEq for PciBdf {
+    fn eq(&self, other: &Self) -> bool {
+        self.segment == other.segment
+            && self.bus == other.bus
+            && self.device == other.device
+            && self.function == other.function
+    }
+}
+
+impl fmt::Debug for PciBdf {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            fmt,
+            "PCI bus {:02x}, device {:02x}, function {:02x} (Segment: {})",
+            self.bus, self.device, self.function, self.segment
+        )
+    }
+}
+
+impl fmt::Display for PciBdf {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            fmt,
+            "{:04X}:{:02X}:{:02X}:{:02X}",
+            self.segment, self.bus, self.device, self.function
+        )
+    }
+}
+
+#[derive(Debug)]
+struct DevInstance {
+    devinst: u32,
+}
+
+impl DevInstance {
+    pub fn new(devinst: u32) -> Option<Self> {
+        let mut status: u32 = 0;
+        let mut problem: u32 = 0;
+        if unsafe { CM_Get_DevNode_Status(&mut status, &mut problem, devinst, 0) } == CR_SUCCESS {
+            Some(Self { devinst })
+        } else {
+            None
+        }
+    }
+
+    pub fn get_device_property(&self, property_key: *const DEVPROPKEY) -> Option<String> {
+        unsafe {
+            let mut buffer: Vec<u16> = vec![0; 260];
+            let mut buffer_len: u32 = buffer.len() as u32;
+            let mut property_type: u32 = 0; // assuming propertytype is a u32 (adjust if needed)
+
+            if CM_Get_DevNode_PropertyW(
+                self.devinst,
+                property_key,
+                &mut property_type,
+                buffer.as_mut_ptr() as *mut u8,
+                &mut buffer_len,
+                0,
+            ) == CR_SUCCESS
+            {
+                let trimed: Vec<u16> = buffer.into_iter().take_while(|&c| c != 0).collect();
+                Some(String::from_utf16_lossy(&trimed))
+            } else {
+                None
+            }
+        }
+    }
+
+    pub fn service(&self) -> Option<String> {
+        self.get_device_property(&DEVPKEY_Device_Service)
+    }
+
+    pub fn location_info(&self) -> Option<String> {
+        self.get_device_property(&DEVPKEY_Device_LocationInfo)
+    }
+
+    pub fn instance_path(&self) -> Option<String> {
+        self.get_device_property(&DEVPKEY_Device_InstanceId)
+    }
+
+    pub fn value(&self) -> u32 {
+        self.devinst
+    }
+}
+
+impl fmt::Display for DevInstance {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(fmt, "{}", self.devinst)
+    }
+}
+
 #[derive(Debug)]
 pub struct PhysicalDisk {
-    name: String,
-    devinst: u32,
+    devinst: DevInstance,
+    path: String,
+    number: i32,
     nsid: i32,
 }
 
 impl PhysicalDisk {
-    /// 예시 데이터를 기반으로 PhysicalDisk를 생성
-    pub fn new(name: &str, devinst: u32) -> Self {
-        Self {
-            name: name.to_string(),
+    pub fn new(devinst: u32) -> Option<Self> {
+        DevInstance::new(devinst).map(|devinst| Self {
             devinst,
+            path: String::new(),
+            number: -1,
             nsid: -1,
+        })
+    }
+
+    pub fn inspect(&mut self) -> &mut Self {
+        if let Some(ref instance_path) = self.devinst.instance_path() {
+            self.path = instance_path.to_string();
+            self.nsid = instance_path
+                .split('&')
+                .last()
+                .unwrap()
+                .parse::<i32>()
+                .unwrap()
+                + 1;
         }
+        self
+    }
+}
+
+impl fmt::Display for PhysicalDisk {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            fmt,
+            " L Disk{}: inst {} nsid {}, path {}",
+            self.number, self.devinst, self.nsid, self.path
+        )
     }
 }
 
 #[derive(Debug)]
-pub struct DeviceInfo {
-    devinst: u32,
+pub struct DiskController {
+    devinst: DevInstance,
+    path: String,
     bdf: PciBdf,
-    disks: Option<Vec<PhysicalDisk>>,
+    disks: Vec<PhysicalDisk>,
 }
 
-impl DeviceInfo {
-    pub fn from_device(devinst: u32, location_info: &str) -> Option<Self> {
-        PciBdf::parse(location_info).map(|bdf| Self {
-            devinst,
-            bdf,
-            disks: None,
-        })
-    }
-
-    pub fn add_disks(&mut self, disks: Vec<PhysicalDisk>) {
-        self.disks = Some(disks);
-    }
-}
-
-// Function to retrieve a device property
-fn get_device_property(devinst: u32, property_key: *const DEVPROPKEY) -> Option<String> {
-    unsafe {
-        let mut buffer: Vec<u16> = vec![0; 260];
-        let mut buffer_len: u32 = buffer.len() as u32;
-        let mut property_type: u32 = 0; // assuming propertytype is a u32 (adjust if needed)
-
-        if CM_Get_DevNode_PropertyW(
-            devinst,
-            property_key,
-            &mut property_type,
-            buffer.as_mut_ptr() as *mut u8,
-            &mut buffer_len,
-            0,
-        ) == CR_SUCCESS
-        {
-            let trimed: Vec<u16> = buffer.into_iter().take_while(|&c| c != 0).collect();
-            Some(String::from_utf16_lossy(&trimed))
-        } else {
-            None
+impl DiskController {
+    pub fn new(devinst: u32) -> Option<Self> {
+        if let Some(devinst) = DevInstance::new(devinst) {
+            match devinst.service() {
+                Some(service) if service == "stornvme" => {
+                    return Some(Self {
+                        devinst,
+                        path: String::new(),
+                        bdf: Default::default(),
+                        disks: vec![],
+                    })
+                }
+                _ => return None,
+            }
         }
+        None
+    }
+
+    pub fn inspect(&mut self) -> &mut Self {
+        if let Some(location_info) = self.devinst.location_info() {
+            self.bdf = PciBdf::parse(&location_info).unwrap_or_default();
+        }
+        if let Some(ref instance_path) = self.devinst.instance_path() {
+            self.path = instance_path.to_string();
+        }
+        self
+    }
+
+    pub fn enum_child_disks(&mut self) -> &mut Self {
+        unsafe {
+            let mut child = 0;
+            let mut result = CM_Get_Child(&mut child, self.devinst.value(), 0);
+            while result == CR_SUCCESS {
+                if let Some(mut disk) = PhysicalDisk::new(child) {
+                    disk.inspect();
+                    self.disks.push(disk);
+                }
+                result = CM_Get_Sibling(&mut child, child, 0);
+            }
+        }
+        self
+    }
+
+    pub fn add_disk(&mut self, disk: PhysicalDisk) {
+        self.disks.push(disk);
+    }
+}
+
+impl fmt::Display for DiskController {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> fmt::Result {
+        write!(
+            fmt,
+            "DiskController ({}) bdf {} - {}\n",
+            self.devinst, self.bdf, self.path
+        )?;
+        for disk in &self.disks {
+            write!(fmt, "{}\n", disk)?;
+        }
+        Ok(())
     }
 }
 
@@ -391,7 +535,6 @@ pub fn enum_dev_interfaces() -> Result<Box<str>, &'static str> {
             return Err("CM_Get_Device_Interface_ListA fail");
         }
 
-        println!("GetDevInstInterfaces {:?}:", iface_list_size);
         let interfaces: Vec<_> = iface_list
             .split(|&e| e == 0x0)
             .filter(|v| !v.is_empty())
@@ -401,7 +544,7 @@ pub fn enum_dev_interfaces() -> Result<Box<str>, &'static str> {
         let mut devinst_next: Option<u32> = None;
         let mut propertytype: DEVPROPTYPE = 0;
         for interface in interfaces {
-            let iface_list_str = String::from_utf16_lossy(interface);
+            // let iface_list_str = String::from_utf16_lossy(interface);
             // println!("{} {:?}", devinst, iface_list_str);
             let mut current_device: Vec<u16> = vec![0; 1000];
             let mut device_id_size: u32 = 1000;
@@ -429,37 +572,9 @@ pub fn enum_dev_interfaces() -> Result<Box<str>, &'static str> {
                 continue;
             }
 
-            let mut status: u32 = 0;
-            let mut problem: u32 = 0;
-            if CM_Get_DevNode_Status(&mut status, &mut problem, devinst, 0) != CR_SUCCESS {
-                continue;
-            }
-
-            if let Some(service) = get_device_property(devinst, &DEVPKEY_Device_Service) {
-                if service != "stornvme" {
-                    continue;
-                }
-            }
-
-            let location_info = get_device_property(devinst, &DEVPKEY_Device_LocationInfo);
-            if location_info.is_none() {
-                continue;
-            }
-            let location_info = location_info.unwrap();
-            if let Some(mut device_info) = DeviceInfo::from_device(devinst, &location_info) {
-                while let Some(dev_inst) = get_child_devices(devinst, &mut devinst_next) {
-                    let mut status: u32 = 0;
-                    let mut problem: u32 = 0;
-                    if CM_Get_DevNode_Status(&mut status, &mut problem, dev_inst, 0) != CR_SUCCESS {
-                        continue;
-                    }
-
-                    if let Some(instance_path) =
-                        get_device_property(dev_inst, &DEVPKEY_Device_InstanceId)
-                    {
-                        println!("  -> {}", instance_path.split('&').last().unwrap());
-                    }
-                }
+            if let Some(mut controller) = DiskController::new(devinst) {
+                controller.inspect().enum_child_disks();
+                println!("{}", controller);
             }
         }
 
@@ -538,5 +653,28 @@ pub fn enum_dev_disk() {
         }
 
         SetupDiDestroyDeviceInfoList(h_dev_info);
+    }
+}
+
+unsafe fn get_physical_disk_number(devinst: u32) -> Option<i32> {
+    let mut id_size = 0;
+    let _ = unsafe { CM_Get_Device_ID_Size(&mut id_size, devinst, 0) };
+    if id_size == 0 {
+        panic!("Failed to get device ID size");
+    }
+
+    let mut buffer = vec![0; id_size as usize];
+    let result = CM_Get_Device_IDW(devinst, buffer.as_mut_ptr(), id_size, 0);
+    if result != CR_SUCCESS {
+        return None;
+    }
+    let device_id = String::from_utf16_lossy(&buffer);
+    println!("{:?}", device_id);
+
+    // "PhysicalDrive" 디스크 필터링
+    if let Some(pos) = device_id.find("PHYSICALDRIVE") {
+        device_id[pos + 13..].parse::<i32>().ok() // Physical Disk 번호 추출
+    } else {
+        None
     }
 }
