@@ -36,6 +36,7 @@ fn main() {
         filename = filepath.to_string();
     }
     if let Some(driveno) = args.driveno {
+        let _ = img_caster::dev_utils::get_drives_dev_inst_by_disk_number(driveno as u32);
         let drv_c = img_caster::disk::get_physical_drv_number_from_logical_drv("C".to_string());
         if drv_c == driveno {
             println!("Can't write to system drive {driveno}");
@@ -70,16 +71,16 @@ fn main() {
 
     // let mut data1 = Box::new(vec![0x33u8; 64 * 512]);
     // let data2 = Box::new(vec![0x55u8; 64 * 512]);
-    if let Some(ref mut disk) = disk {
+    if let Some(ref mut _disk) = disk {
         // if let Err(e) = disk.write(&data1) {
         //     println!("Disk write Error: {:?}", e);
         // }
         // if let Err(e) = disk.read(&mut data) {
         //     println!("Disk read Error: {:?}", e);
         // }
-        if let Err(e) = disk.discovery0() {
-            println!("discovery0 Error: {:?}", e);
-        }
+        // if let Err(e) = disk.discovery0() {
+        //     println!("discovery0 Error: {:?}", e);
+        // }
         // if let Err(e) = disk.scsi_write(&data2) {
         //     println!("scsi write Error: {:?}", e);
         // }

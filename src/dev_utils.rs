@@ -15,72 +15,6 @@ use windows_sys::{
     },
 };
 
-pub fn get_dev_inst_interfaces(devinst: u32) -> Result<Box<str>, &'static str> {
-    unsafe {
-        let mut device_id: Vec<u8> = vec![0; 1000];
-        if CM_Get_Device_IDA(devinst, device_id.as_mut_ptr() as *mut u8, 1000, 0) != CR_SUCCESS {
-            return Err("CM_Get_Device_IDA fail");
-        }
-
-        let guid: *const GUID = &GUID_DEVINTERFACE_STORAGEPORT;
-        // Get list size
-        let mut iface_list_size: u32 = 0;
-        if CM_Get_Device_Interface_List_SizeA(
-            &mut iface_list_size,
-            guid,
-            device_id.as_mut_ptr() as *mut u8,
-            CM_GET_DEVICE_INTERFACE_LIST_PRESENT,
-        ) != CR_SUCCESS
-        {
-            return Err("CM_Get_Device_Interface_List_SizeA fail");
-        }
-
-        let mut iface_list: Vec<u8> = vec![0; iface_list_size as usize];
-        if CM_Get_Device_Interface_ListA(
-            guid,
-            device_id.as_mut_ptr() as *mut u8,
-            iface_list.as_mut_ptr() as *mut u8,
-            iface_list_size,
-            CM_GET_DEVICE_INTERFACE_LIST_PRESENT,
-        ) != CR_SUCCESS
-        {
-            return Err("CM_Get_Device_Interface_ListA fail");
-        }
-
-        let device_id_str =
-            std::ffi::CStr::from_ptr(device_id.as_ptr() as *const i8).to_string_lossy();
-        let iface_list_str =
-            std::ffi::CStr::from_ptr(iface_list.as_ptr() as *const i8).to_string_lossy();
-        println!(
-            "GetDevInstInterfaces {} ({}) -> {:?}, {}\n",
-            devinst, device_id_str, iface_list_size, iface_list_str
-        );
-
-        return Ok(iface_list_str.into());
-    }
-}
-
-pub fn get_parent_dev_path(driveno: u32) -> Result<Box<str>, &'static str> {
-    if let Ok(devinst) = get_drives_dev_inst_by_disk_number(driveno) {
-        unsafe {
-            let mut parent = std::mem::zeroed();
-            if CM_Get_Parent(&mut parent, devinst, 0) == CR_SUCCESS {
-                let mut device_id_parent: Vec<u8> = vec![0; 1000];
-                if CM_Get_Device_IDA(parent, device_id_parent.as_mut_ptr() as *mut u8, 1000, 0)
-                    == CR_SUCCESS
-                {
-                    let device_id_parent_str =
-                        std::ffi::CStr::from_ptr(device_id_parent.as_ptr() as *const i8)
-                            .to_string_lossy();
-                    println!("Parent Device ID: {}", device_id_parent_str);
-                }
-                return get_dev_inst_interfaces(parent);
-            }
-        }
-    }
-    return Err("Can't get parent's path");
-}
-
 pub fn get_drives_dev_inst_by_disk_number(disk_number: u32) -> Result<u32, &'static str> {
     unsafe {
         let guid: *const GUID = &GUID_DEVINTERFACE_DISK;
@@ -329,38 +263,44 @@ impl DevInstance {
         }
     }
 
-    pub fn get_device_property(&self, property_key: *const DEVPROPKEY) -> Option<String> {
-        unsafe {
-            let mut buffer: Vec<u16> = vec![0; 260];
-            let mut buffer_len: u32 = buffer.len() as u32;
-            let mut property_type: u32 = 0; // assuming propertytype is a u32 (adjust if needed)
+    pub fn get_device_property(&self, property_key: *const DEVPROPKEY) -> Option<Vec<u16>> {
+        let mut buffer: Vec<u16> = vec![0; 260];
+        let mut buffer_len: u32 = buffer.len() as u32;
+        let mut property_type: u32 = 0; // assuming propertytype is a u32 (adjust if needed)
 
-            if CM_Get_DevNode_PropertyW(
+        if unsafe {
+            CM_Get_DevNode_PropertyW(
                 self.devinst,
                 property_key,
                 &mut property_type,
                 buffer.as_mut_ptr() as *mut u8,
                 &mut buffer_len,
                 0,
-            ) == CR_SUCCESS
-            {
-                let trimed: Vec<u16> = buffer.into_iter().take_while(|&c| c != 0).collect();
-                Some(String::from_utf16_lossy(&trimed))
-            } else {
-                None
-            }
+            )
+        } != CR_SUCCESS
+        {
+            return None;
         }
+
+        let trimed: Vec<u16> = buffer.into_iter().take_while(|&c| c != 0).collect();
+        Some(trimed)
     }
 
     pub fn service(&self) -> Option<String> {
-        self.get_device_property(&DEVPKEY_Device_Service)
+        if let Some(trimed) = self.get_device_property(&DEVPKEY_Device_Service) {
+            return Some(String::from_utf16_lossy(&trimed));
+        }
+        None
     }
 
     pub fn location_info(&self) -> Option<String> {
-        self.get_device_property(&DEVPKEY_Device_LocationInfo)
+        if let Some(trimed) = self.get_device_property(&DEVPKEY_Device_LocationInfo) {
+            return Some(String::from_utf16_lossy(&trimed));
+        }
+        None
     }
 
-    pub fn instance_path(&self) -> Option<String> {
+    pub fn instance_id(&self) -> Option<Vec<u16>> {
         self.get_device_property(&DEVPKEY_Device_InstanceId)
     }
 
@@ -371,15 +311,15 @@ impl DevInstance {
 
 impl fmt::Display for DevInstance {
     fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(fmt, "{}", self.devinst)
+        write!(fmt, "{:02}", self.devinst)
     }
 }
 
 #[derive(Debug)]
 pub struct PhysicalDisk {
     devinst: DevInstance,
-    path: String,
-    number: i32,
+    device_path: String,
+    disk_number: i32,
     nsid: i32,
 }
 
@@ -387,16 +327,15 @@ impl PhysicalDisk {
     pub fn new(devinst: u32) -> Option<Self> {
         DevInstance::new(devinst).map(|devinst| Self {
             devinst,
-            path: String::new(),
-            number: -1,
+            device_path: String::new(),
+            disk_number: -1,
             nsid: -1,
         })
     }
 
     pub fn inspect(&mut self) -> &mut Self {
-        if let Some(ref instance_path) = self.devinst.instance_path() {
-            self.path = instance_path.to_string();
-            self.nsid = instance_path
+        if let Some(ref instance_path) = self.devinst.instance_id() {
+            self.nsid = String::from_utf16_lossy(instance_path)
                 .split('&')
                 .last()
                 .unwrap()
@@ -406,14 +345,71 @@ impl PhysicalDisk {
         }
         self
     }
+
+    pub fn get_interface_path(&mut self) -> &mut Self {
+        unsafe {
+            if let Some(ref device_id) = self.devinst.instance_id() {
+                let guid: *const GUID = &GUID_DEVINTERFACE_DISK;
+                let mut iface_list_size: u32 = 0;
+                let ret = CM_Get_Device_Interface_List_SizeW(
+                    &mut iface_list_size,
+                    guid,
+                    device_id.as_ptr(),
+                    CM_GET_DEVICE_INTERFACE_LIST_PRESENT,
+                );
+                if ret != CR_SUCCESS {
+                    println!(
+                        "get size of {:?}: size {} ret {:?}",
+                        device_id, iface_list_size, ret
+                    );
+                    return self;
+                }
+
+                let mut iface_list: Vec<u16> = vec![0; iface_list_size as usize];
+                if CM_Get_Device_Interface_ListW(
+                    guid,
+                    device_id.as_ptr(),
+                    iface_list.as_mut_ptr(),
+                    iface_list_size,
+                    CM_GET_DEVICE_INTERFACE_LIST_PRESENT,
+                ) != CR_SUCCESS
+                {
+                    return self;
+                }
+
+                let interface: Vec<u16> = iface_list.into_iter().take_while(|&c| c != 0).collect();
+                self.device_path = String::from_utf16_lossy(&interface).to_string();
+            }
+        }
+        self
+    }
+
+    pub fn get_device_number(&mut self) -> &mut Self {
+        unsafe {
+            let handle = open(&self.device_path, 'r');
+            if handle != INVALID_HANDLE_VALUE {
+                let mut sdn: STORAGE_DEVICE_NUMBER = zeroed();
+                if let Ok(_ret) = ioctl(
+                    handle,
+                    IOCTL_STORAGE_GET_DEVICE_NUMBER,
+                    Some((null_mut(), 0)),
+                    Some((&mut sdn as *mut _ as *mut c_void, size_of_val(&sdn))),
+                ) {
+                    self.disk_number = sdn.DeviceNumber as i32;
+                    CloseHandle(handle);
+                }
+            }
+        }
+        self
+    }
 }
 
 impl fmt::Display for PhysicalDisk {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         write!(
             fmt,
-            " L Disk{}: inst {} nsid {}, path {}",
-            self.number, self.devinst, self.nsid, self.path
+            " L Disk{:02} ({}): nsid {}, path {}",
+            self.disk_number, self.devinst, self.nsid, self.device_path
         )
     }
 }
@@ -448,8 +444,8 @@ impl DiskController {
         if let Some(location_info) = self.devinst.location_info() {
             self.bdf = PciBdf::parse(&location_info).unwrap_or_default();
         }
-        if let Some(ref instance_path) = self.devinst.instance_path() {
-            self.path = instance_path.to_string();
+        if let Some(ref instance_path) = self.devinst.instance_id() {
+            self.path = String::from_utf16_lossy(instance_path);
         }
         self
     }
@@ -460,7 +456,7 @@ impl DiskController {
             let mut result = CM_Get_Child(&mut child, self.devinst.value(), 0);
             while result == CR_SUCCESS {
                 if let Some(mut disk) = PhysicalDisk::new(child) {
-                    disk.inspect();
+                    disk.inspect().get_interface_path().get_device_number();
                     self.disks.push(disk);
                 }
                 result = CM_Get_Sibling(&mut child, child, 0);
@@ -486,27 +482,6 @@ impl fmt::Display for DiskController {
         }
         Ok(())
     }
-}
-
-fn get_child_devices(dev_inst: u32, dev_inst_next: &mut Option<u32>) -> Option<u32> {
-    let mut temp_inst: u32 = 0;
-
-    if dev_inst_next.is_none() {
-        let cr: CONFIGRET = unsafe { CM_Get_Child(&mut temp_inst, dev_inst, 0) };
-        if cr == CR_SUCCESS {
-            *dev_inst_next = Some(temp_inst);
-            return Some(temp_inst);
-        }
-    } else {
-        if let Some(dev_inst_next_val) = dev_inst_next {
-            let cr: CONFIGRET = unsafe { CM_Get_Sibling(&mut temp_inst, *dev_inst_next_val, 0) };
-            if cr == CR_SUCCESS {
-                *dev_inst_next = Some(temp_inst);
-                return Some(temp_inst);
-            }
-        }
-    }
-    None
 }
 
 pub fn enum_dev_interfaces() -> Result<Box<str>, &'static str> {
@@ -541,7 +516,6 @@ pub fn enum_dev_interfaces() -> Result<Box<str>, &'static str> {
             .collect();
 
         let mut devinst = 0;
-        let mut devinst_next: Option<u32> = None;
         let mut propertytype: DEVPROPTYPE = 0;
         for interface in interfaces {
             // let iface_list_str = String::from_utf16_lossy(interface);
@@ -579,102 +553,5 @@ pub fn enum_dev_interfaces() -> Result<Box<str>, &'static str> {
         }
 
         return Ok("f".into());
-    }
-}
-
-pub fn enum_dev_disk() {
-    unsafe {
-        let guid: *const GUID = &GUID_DEVINTERFACE_STORAGEPORT;
-        let h_dev_info: HDEVINFO = SetupDiGetClassDevsA(
-            guid,
-            null_mut(),
-            0 as HWND,
-            DIGCF_PRESENT | DIGCF_DEVICEINTERFACE,
-        );
-
-        if h_dev_info == INVALID_HANDLE_VALUE {
-            println!("SetupDiGetClassDevs failed");
-            return;
-        }
-
-        let mut device_info_data: SP_DEVINFO_DATA = zeroed();
-        let mut device_interface_data: SP_DEVICE_INTERFACE_DATA = zeroed();
-        device_info_data.cbSize = size_of::<SP_DEVINFO_DATA>() as u32;
-        device_interface_data.cbSize = size_of::<SP_DEVICE_INTERFACE_DATA>() as u32;
-
-        let mut index: u32 = 0;
-        let mut device_id: Vec<u8> = vec![0; 1024];
-        let device_interface_detail_data: *mut SP_DEVICE_INTERFACE_DETAIL_DATA_A =
-            device_id.as_mut_ptr() as *mut SP_DEVICE_INTERFACE_DETAIL_DATA_A;
-        (*device_interface_detail_data).cbSize =
-            size_of::<SP_DEVICE_INTERFACE_DETAIL_DATA_A>() as u32;
-
-        while SetupDiEnumDeviceInterfaces(
-            h_dev_info,
-            null_mut(),
-            guid,
-            index,
-            &mut device_interface_data,
-        ) != 0
-        {
-            if SetupDiGetDeviceInterfaceDetailA(
-                h_dev_info,
-                &mut device_interface_data,
-                device_interface_detail_data,
-                1024,
-                null_mut(),
-                &mut device_info_data,
-            ) != 0
-            {
-                let device_path = std::ffi::CStr::from_ptr(
-                    (*device_interface_detail_data).DevicePath.as_ptr() as *const i8,
-                )
-                .to_string_lossy();
-
-                println!("enum Device path: {:?}", device_path);
-                get_dev_inst_interfaces(device_info_data.DevInst).unwrap();
-
-                let mut parent = std::mem::zeroed();
-                if CM_Get_Parent(&mut parent, device_info_data.DevInst, 0) == CR_SUCCESS {
-                    let mut device_id_parent: Vec<u8> = vec![0; 1000];
-                    if CM_Get_Device_IDA(parent, device_id_parent.as_mut_ptr() as *mut u8, 1000, 0)
-                        == CR_SUCCESS
-                    {
-                        let device_id_parent_str =
-                            std::ffi::CStr::from_ptr(device_id_parent.as_ptr() as *const i8)
-                                .to_string_lossy();
-                        println!("Parent Device ID: {}", device_id_parent_str);
-                        get_dev_inst_interfaces(parent).unwrap();
-                    }
-                }
-            }
-
-            index += 1;
-        }
-
-        SetupDiDestroyDeviceInfoList(h_dev_info);
-    }
-}
-
-unsafe fn get_physical_disk_number(devinst: u32) -> Option<i32> {
-    let mut id_size = 0;
-    let _ = unsafe { CM_Get_Device_ID_Size(&mut id_size, devinst, 0) };
-    if id_size == 0 {
-        panic!("Failed to get device ID size");
-    }
-
-    let mut buffer = vec![0; id_size as usize];
-    let result = CM_Get_Device_IDW(devinst, buffer.as_mut_ptr(), id_size, 0);
-    if result != CR_SUCCESS {
-        return None;
-    }
-    let device_id = String::from_utf16_lossy(&buffer);
-    println!("{:?}", device_id);
-
-    // "PhysicalDrive" 디스크 필터링
-    if let Some(pos) = device_id.find("PHYSICALDRIVE") {
-        device_id[pos + 13..].parse::<i32>().ok() // Physical Disk 번호 추출
-    } else {
-        None
     }
 }
