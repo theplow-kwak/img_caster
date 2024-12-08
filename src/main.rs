@@ -1,4 +1,5 @@
 use clap::Parser;
+use img_caster::dev_utils::NvmeControllerList;
 use img_caster::disk::Disk;
 
 #[derive(Parser, Default, Debug)]
@@ -29,7 +30,9 @@ struct Args {
 fn main() {
     let args = Args::parse();
 
-    let _ = img_caster::dev_utils::enum_dev_interfaces();
+    let mut controller_list = NvmeControllerList::new().unwrap();
+    controller_list.enumerate();
+    println!("{}", controller_list);
 
     let mut filename = String::from("");
     if let Some(filepath) = args.filepath.as_deref() {

@@ -415,14 +415,14 @@ impl fmt::Display for PhysicalDisk {
 }
 
 #[derive(Debug)]
-pub struct DiskController {
+pub struct NvmeController {
     devinst: DevInstance,
     path: String,
     bdf: PciBdf,
     disks: Vec<PhysicalDisk>,
 }
 
-impl DiskController {
+impl NvmeController {
     pub fn new(devinst: u32) -> Option<Self> {
         if let Some(devinst) = DevInstance::new(devinst) {
             match devinst.service() {
@@ -470,7 +470,7 @@ impl DiskController {
     }
 }
 
-impl fmt::Display for DiskController {
+impl fmt::Display for NvmeController {
     fn fmt(&self, fmt: &mut std::fmt::Formatter) -> fmt::Result {
         write!(
             fmt,
@@ -484,74 +484,98 @@ impl fmt::Display for DiskController {
     }
 }
 
-pub fn enum_dev_interfaces() -> Result<Box<str>, &'static str> {
-    unsafe {
-        let guid: *const GUID = &GUID_DEVINTERFACE_STORAGEPORT;
-        let mut iface_list_size: u32 = 0;
-        if CM_Get_Device_Interface_List_SizeW(
-            &mut iface_list_size,
-            guid,
-            null_mut(),
-            CM_GET_DEVICE_INTERFACE_LIST_PRESENT,
-        ) != CR_SUCCESS
-        {
-            return Err("CM_Get_Device_Interface_List_SizeA fail");
-        }
+pub struct NvmeControllerList {
+    controllers: Vec<NvmeController>,
+}
 
-        let mut iface_list: Vec<u16> = vec![0; iface_list_size as usize];
-        if CM_Get_Device_Interface_ListW(
-            guid,
-            null_mut(),
-            iface_list.as_mut_ptr() as *mut u16,
-            iface_list_size,
-            CM_GET_DEVICE_INTERFACE_LIST_PRESENT,
-        ) != CR_SUCCESS
-        {
-            return Err("CM_Get_Device_Interface_ListA fail");
-        }
+impl NvmeControllerList {
+    pub fn new() -> Option<Self> {
+        Some(Self {
+            controllers: vec![],
+        })
+    }
 
-        let interfaces: Vec<_> = iface_list
-            .split(|&e| e == 0x0)
-            .filter(|v| !v.is_empty())
-            .collect();
-
-        let mut devinst = 0;
-        let mut propertytype: DEVPROPTYPE = 0;
-        for interface in interfaces {
-            // let iface_list_str = String::from_utf16_lossy(interface);
-            // println!("{} {:?}", devinst, iface_list_str);
-            let mut current_device: Vec<u16> = vec![0; 1000];
-            let mut device_id_size: u32 = 1000;
-            if CM_Get_Device_Interface_PropertyW(
-                interface.as_ptr(),
-                &DEVPKEY_Device_InstanceId,
-                &mut propertytype,
-                current_device.as_mut_ptr() as *mut u8,
-                &mut device_id_size,
-                0,
+    pub fn enumerate(&mut self) -> &mut Self {
+        unsafe {
+            let guid: *const GUID = &GUID_DEVINTERFACE_STORAGEPORT;
+            let mut iface_list_size: u32 = 0;
+            if CM_Get_Device_Interface_List_SizeW(
+                &mut iface_list_size,
+                guid,
+                null_mut(),
+                CM_GET_DEVICE_INTERFACE_LIST_PRESENT,
             ) != CR_SUCCESS
             {
-                continue;
-            }
-            if propertytype != DEVPROP_TYPE_STRING {
-                continue;
+                return self;
             }
 
-            if CM_Locate_DevNodeW(
-                &mut devinst,
-                current_device.as_ptr(),
-                CM_LOCATE_DEVNODE_NORMAL,
+            let mut iface_list: Vec<u16> = vec![0; iface_list_size as usize];
+            if CM_Get_Device_Interface_ListW(
+                guid,
+                null_mut(),
+                iface_list.as_mut_ptr() as *mut u16,
+                iface_list_size,
+                CM_GET_DEVICE_INTERFACE_LIST_PRESENT,
             ) != CR_SUCCESS
             {
-                continue;
+                return self;
             }
 
-            if let Some(mut controller) = DiskController::new(devinst) {
-                controller.inspect().enum_child_disks();
-                println!("{}", controller);
+            let interfaces: Vec<_> = iface_list
+                .split(|&e| e == 0x0)
+                .filter(|v| !v.is_empty())
+                .collect();
+
+            let mut devinst = 0;
+            let mut propertytype: DEVPROPTYPE = 0;
+            for interface in interfaces {
+                // let iface_list_str = String::from_utf16_lossy(interface);
+                // println!("{} {:?}", devinst, iface_list_str);
+                let mut current_device: Vec<u16> = vec![0; 1000];
+                let mut device_id_size: u32 = 1000;
+                if CM_Get_Device_Interface_PropertyW(
+                    interface.as_ptr(),
+                    &DEVPKEY_Device_InstanceId,
+                    &mut propertytype,
+                    current_device.as_mut_ptr() as *mut u8,
+                    &mut device_id_size,
+                    0,
+                ) != CR_SUCCESS
+                {
+                    continue;
+                }
+                if propertytype != DEVPROP_TYPE_STRING {
+                    continue;
+                }
+
+                if CM_Locate_DevNodeW(
+                    &mut devinst,
+                    current_device.as_ptr(),
+                    CM_LOCATE_DEVNODE_NORMAL,
+                ) != CR_SUCCESS
+                {
+                    continue;
+                }
+
+                if let Some(mut controller) = NvmeController::new(devinst) {
+                    controller.inspect().enum_child_disks();
+                    self.controllers.push(controller);
+                }
             }
         }
+        self
+    }
 
-        return Ok("f".into());
+    pub fn by_bus(&mut self, bus: u32) -> Option<NvmeController> {
+        self.controllers.pop()
+    }
+}
+
+impl fmt::Display for NvmeControllerList {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> fmt::Result {
+        for controller in &self.controllers {
+            write!(fmt, "{}\n", controller)?;
+        }
+        Ok(())
     }
 }
