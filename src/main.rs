@@ -30,7 +30,7 @@ struct Args {
 fn main() {
     let args = Args::parse();
 
-    let mut controller_list = NvmeControllerList::new().unwrap();
+    let mut controller_list = NvmeControllerList::new();
     controller_list.enumerate();
     println!("{}", controller_list);
 
@@ -39,21 +39,13 @@ fn main() {
         filename = filepath.to_string();
     }
     if let Some(driveno) = args.driveno {
-        let _ = img_caster::dev_utils::get_drives_dev_inst_by_disk_number(driveno as u32);
-        let drv_c = img_caster::disk::get_physical_drv_number_from_logical_drv("C".to_string());
-        if drv_c == driveno {
-            println!("Can't write to system drive {driveno}");
-        } else {
-            filename = format!("\\\\.\\PhysicalDrive{driveno}");
-        }
+        filename = controller_list.by_num(driveno).unwrap_or("".into());
     }
     if let Some(busno) = args.busno {
-        filename = img_caster::dev_utils::get_drives_dev_inst_by_bus_number(busno)
-            .unwrap_or("".into())
-            .to_string();
+        filename = controller_list.by_bus(busno).unwrap_or("".into());
     }
     if let Some(scsino) = args.scsino {
-        let drv_c = img_caster::disk::get_physical_drv_number_from_logical_drv("C".to_string());
+        let drv_c = img_caster::disk::get_physical_drv_number_from_logical_drv("C:".to_string());
         if drv_c == scsino {
             println!("Can't write to system drive {scsino}");
         } else {

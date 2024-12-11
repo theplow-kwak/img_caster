@@ -78,7 +78,7 @@ fn main() {
         filename = filepath.to_string();
     }
     if let Some(driveno) = args.driveno {
-        let drv_c = img_caster::disk::get_physical_drv_number_from_logical_drv("C".to_string());
+        let drv_c = img_caster::disk::get_physical_drv_number_from_logical_drv("C:".to_string());
         if drv_c == driveno as i32 {
             println!("Can't write to system drive {driveno}");
         } else {

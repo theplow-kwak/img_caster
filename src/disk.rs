@@ -33,7 +33,7 @@ pub fn open(path: &String, rw: char) -> isize {
             },
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             null_mut(),
-            if rw == 'w' && !path.contains("PhysicalDrive") {
+            if rw == 'w' && !path.contains("\\\\.\\") {
                 CREATE_ALWAYS
             } else {
                 OPEN_EXISTING
@@ -408,42 +408,24 @@ unsafe impl Send for Disk {}
 unsafe impl Sync for Disk {}
 
 pub fn get_physical_drv_number_from_logical_drv(drive_name: String) -> i32 {
-    let path = format!("\\\\.\\{drive_name}:");
+    let mut disk_number = -1;
+    let path = format!("\\\\.\\{drive_name}");
     let h_device = open(&path, 'r');
 
-    if h_device == INVALID_HANDLE_VALUE {
-        println!("Couldn't open target drive: {}", path,);
-        return -1;
-    }
-
-    let mut st_volume_data: VOLUME_DISK_EXTENTS = unsafe { zeroed() };
-    let b_ret = ioctl(
-        h_device,
-        IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
-        Some((null_mut(), 0)),
-        Some((
-            &mut st_volume_data as *mut _ as *mut c_void,
-            size_of_val(&st_volume_data),
-        )),
-    );
-
-    unsafe { CloseHandle(h_device) };
-
-    match b_ret {
-        Err(_err) => {
-            println!("DeviceIoControl is failed(Err Code: {})", last_error());
-            return -1;
+    if h_device != INVALID_HANDLE_VALUE {
+        let mut st_volume_data: VOLUME_DISK_EXTENTS = unsafe { zeroed() };
+        if let Ok(_ret) = ioctl(
+            h_device,
+            IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
+            Some((null_mut(), 0)),
+            Some((
+                &mut st_volume_data as *mut _ as *mut c_void,
+                size_of_val(&st_volume_data),
+            )),
+        ) {
+            disk_number = st_volume_data.Extents[0].DiskNumber as i32
         }
-        Ok(_ret) => {}
+        unsafe { CloseHandle(h_device) };
     }
-
-    if st_volume_data.NumberOfDiskExtents < 1 {
-        println!(
-            "Number of Disk is Invalid ({})",
-            st_volume_data.NumberOfDiskExtents,
-        );
-        return -1;
-    }
-
-    st_volume_data.Extents[0].DiskNumber as i32
+    disk_number
 }
