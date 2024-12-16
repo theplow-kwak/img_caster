@@ -1,11 +1,13 @@
 use clap::Parser;
-use img_caster::dev_utils::NvmeControllerList;
-use img_caster::disk::Disk;
+use img_caster::dev::dev_utils::NvmeControllerList;
+use img_caster::dev::disk::{self, Disk};
 
 #[derive(Parser, Default, Debug)]
 #[clap(author, version, about)]
 /// Sender for Multicast File Transfer
 struct Args {
+    cmd: Option<String>,
+
     /// File name to transmit data.
     #[clap(short, long, value_name = "FILE")]
     filepath: Option<String>,
@@ -45,7 +47,7 @@ fn main() {
         filename = controller_list.by_bus(busno).unwrap_or("".into());
     }
     if let Some(scsino) = args.scsino {
-        let drv_c = img_caster::disk::get_physical_drv_number_from_logical_drv("C:".to_string());
+        let drv_c = disk::get_physical_drv_number_from_logical_drv("C:".to_string());
         if drv_c == scsino {
             println!("Can't write to system drive {scsino}");
         } else {

@@ -13,7 +13,7 @@ use std::{
     ptr::{null, null_mut},
 };
 
-use crate::scsi::*;
+use super::scsi::*;
 use crate::SECTOR_SIZE;
 
 pub fn last_error() -> u32 {
@@ -423,7 +423,7 @@ pub fn get_physical_drv_number_from_logical_drv(drive_name: String) -> i32 {
                 size_of_val(&st_volume_data),
             )),
         ) {
-            disk_number = st_volume_data.Extents[0].DiskNumber as i32
+            disk_number = st_volume_data.Extents[0].DiskNumber as i32;
         }
         unsafe { CloseHandle(h_device) };
     }

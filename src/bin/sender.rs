@@ -9,8 +9,8 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use dev::disk::Disk;
 use img_caster::datafifo::DataFIFO;
-use img_caster::disk::Disk;
 use img_caster::sender::McastSender;
 use img_caster::*;
 

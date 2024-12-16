@@ -1,4 +1,4 @@
-use crate::disk::{get_physical_drv_number_from_logical_drv, ioctl, open};
+use crate::dev::disk::{get_physical_drv_number_from_logical_drv, ioctl, open};
 use once_cell::sync::Lazy;
 use sscanf;
 use std::sync::Mutex;
@@ -123,6 +123,48 @@ impl DevInstance {
 
     pub fn instance_id(&self) -> Option<Vec<u16>> {
         self.get_device_property(&DEVPKEY_Device_InstanceId)
+    }
+
+    pub fn enable(&self) -> CONFIGRET {
+        unsafe { CM_Enable_DevNode(self.devinst, 0) }
+    }
+
+    pub fn disable(&self) -> CONFIGRET {
+        unsafe { CM_Disable_DevNode(self.devinst, CM_DISABLE_HARDWARE | CM_DISABLE_UI_NOT_OK) }
+    }
+
+    pub fn remove(&self) -> CONFIGRET {
+        unsafe {
+            CM_Query_And_Remove_SubTreeA(
+                self.devinst,
+                null_mut(),
+                null_mut(),
+                0,
+                CM_REMOVE_NO_RESTART,
+            )
+        }
+    }
+
+    pub fn restart(&self) -> CONFIGRET {
+        unsafe { CM_Setup_DevNode(self.devinst, CM_SETUP_DEVNODE_READY) }
+    }
+
+    pub fn refresh(&self) -> CONFIGRET {
+        let mut devinst: u32 = 0;
+        let cr = unsafe { CM_Locate_DevNodeA(&mut devinst, null_mut(), CM_LOCATE_DEVNODE_NORMAL) };
+        if cr == CR_SUCCESS {
+            unsafe { CM_Reenumerate_DevNode(devinst, 0) }
+        } else {
+            cr
+        }
+    }
+
+    pub fn parent(&self) -> Option<Self> {
+        let mut parent: u32 = 0;
+        if unsafe { CM_Get_Parent(&mut parent, self.devinst, 0) } == CR_SUCCESS {
+            return Some(Self { devinst: parent });
+        }
+        None
     }
 
     pub fn value(&self) -> u32 {
@@ -340,6 +382,53 @@ impl NvmeController {
 
     pub fn add_disk(&mut self, disk: PhysicalDisk) {
         self.disks.push(disk);
+    }
+
+    pub fn enable(&self) -> CONFIGRET {
+        let mut cr = self.devinst.enable();
+        if cr == CR_SUCCESS {
+            for disk in &self.disks {
+                cr = disk.devinst.enable();
+            }
+        }
+        cr
+    }
+
+    pub fn disable(&self) -> CONFIGRET {
+        for disk in &self.disks {
+            disk.devinst.disable();
+        }
+        self.devinst.disable()
+    }
+
+    pub fn remove(&self) -> CONFIGRET {
+        for disk in &self.disks {
+            disk.devinst.remove();
+        }
+        self.devinst.remove()
+    }
+
+    pub fn restart(&self) -> CONFIGRET {
+        self.remove();
+        let cr = self.devinst.restart();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        cr
+    }
+
+    pub fn rescan(&self) -> CONFIGRET {
+        let mut cr = CR_SUCCESS;
+        self.remove();
+        if let Some(parent) = self.devinst.parent() {
+            parent.disable();
+            std::thread::sleep(std::time::Duration::from_millis(1000));
+            cr = parent.enable();
+            std::thread::sleep(std::time::Duration::from_millis(1000));
+        }
+        cr
+    }
+
+    pub fn refresh(&self) -> CONFIGRET {
+        self.devinst.refresh()
     }
 }
 

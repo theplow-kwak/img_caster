@@ -2,7 +2,7 @@ use crossterm::event::{self, KeyCode, KeyEvent};
 
 pub mod bitarray;
 pub mod datafifo;
-pub mod disk;
+pub mod dev;
 pub mod multicast;
 pub mod packet;
 pub mod receiver_a;
@@ -10,8 +10,6 @@ pub mod receiver_s;
 pub mod sender;
 pub mod slice;
 // pub mod statistics;
-pub mod dev_utils;
-pub mod scsi;
 
 pub const RUNNING: bool = true;
 pub const ENDLOOP: bool = false;

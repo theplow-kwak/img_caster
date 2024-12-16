@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use crate::bitarray::BitArray;
 use crate::datafifo::DataFIFO;
-use crate::disk::Disk;
+use crate::dev::disk::Disk;
 use crate::multicast::*;
 use crate::packet::*;
 use crate::slice::Slice;
