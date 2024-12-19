@@ -18,7 +18,7 @@ use windows_sys::{
     },
 };
 
-#[derive(Default, PartialEq, Eq)]
+#[derive(Default, PartialEq, Eq, PartialOrd, Ord)]
 struct PciBdf {
     segment: i32,
     bus: i32,
@@ -71,6 +71,8 @@ impl fmt::Display for PciBdf {
 #[derive(Debug)]
 struct DevInstance {
     devinst: u32,
+    status: u32,
+    problem: u32,
 }
 
 impl DevInstance {
@@ -78,7 +80,11 @@ impl DevInstance {
         let mut status: u32 = 0;
         let mut problem: u32 = 0;
         if unsafe { CM_Get_DevNode_Status(&mut status, &mut problem, devinst, 0) } == CR_SUCCESS {
-            Some(Self { devinst })
+            Some(Self {
+                devinst,
+                status,
+                problem,
+            })
         } else {
             None
         }
@@ -121,20 +127,37 @@ impl DevInstance {
         None
     }
 
+    pub fn pcibdf(&self) -> PciBdf {
+        let mut bdf = PciBdf::default();
+        if let Some(trimed) = self.get_device_property(&DEVPKEY_Device_LocationInfo) {
+            bdf = PciBdf::parse(&String::from_utf16_lossy(&trimed)).unwrap_or_default();
+        }
+        bdf
+    }
+
     pub fn instance_id(&self) -> Option<Vec<u16>> {
         self.get_device_property(&DEVPKEY_Device_InstanceId)
     }
 
     pub fn enable(&self) -> CONFIGRET {
-        unsafe { CM_Enable_DevNode(self.devinst, 0) }
+        let cr = unsafe { CM_Enable_DevNode(self.devinst, 0) };
+        if cr != CR_SUCCESS {
+            println!("enable {} failed ({})", self.devinst, cr);
+        }
+        cr
     }
 
     pub fn disable(&self) -> CONFIGRET {
-        unsafe { CM_Disable_DevNode(self.devinst, CM_DISABLE_HARDWARE | CM_DISABLE_UI_NOT_OK) }
+        let cr =
+            unsafe { CM_Disable_DevNode(self.devinst, CM_DISABLE_HARDWARE | CM_DISABLE_UI_NOT_OK) };
+        if cr != CR_SUCCESS {
+            println!("disable {} failed ({})", self.devinst, cr);
+        }
+        cr
     }
 
     pub fn remove(&self) -> CONFIGRET {
-        unsafe {
+        let cr = unsafe {
             CM_Query_And_Remove_SubTreeA(
                 self.devinst,
                 null_mut(),
@@ -142,11 +165,19 @@ impl DevInstance {
                 0,
                 CM_REMOVE_NO_RESTART,
             )
+        };
+        if cr != CR_SUCCESS {
+            println!("remove {} failed ({})", self.devinst, cr);
         }
+        cr
     }
 
     pub fn restart(&self) -> CONFIGRET {
-        unsafe { CM_Setup_DevNode(self.devinst, CM_SETUP_DEVNODE_READY) }
+        let cr = unsafe { CM_Setup_DevNode(self.devinst, CM_SETUP_DEVNODE_READY) };
+        if cr != CR_SUCCESS {
+            println!("restart {} failed ({})", self.devinst, cr);
+        }
+        cr
     }
 
     pub fn refresh(&self) -> CONFIGRET {
@@ -155,6 +186,7 @@ impl DevInstance {
         if cr == CR_SUCCESS {
             unsafe { CM_Reenumerate_DevNode(devinst, 0) }
         } else {
+            println!("refresh {} failed ({})", self.devinst, cr);
             cr
         }
     }
@@ -162,12 +194,12 @@ impl DevInstance {
     pub fn parent(&self) -> Option<Self> {
         let mut parent: u32 = 0;
         if unsafe { CM_Get_Parent(&mut parent, self.devinst, 0) } == CR_SUCCESS {
-            return Some(Self { devinst: parent });
+            return DevInstance::new(parent);
         }
         None
     }
 
-    pub fn value(&self) -> u32 {
+    pub fn handle(&self) -> u32 {
         self.devinst
     }
 }
@@ -180,7 +212,7 @@ impl fmt::Display for DevInstance {
 
 #[derive(Debug)]
 pub struct LogicalDrive;
-static SHARED_DATA: Lazy<Mutex<Vec<(i32, String)>>> = Lazy::new(|| Mutex::new(Vec::new()));
+static SHARED_DATA: Mutex<Vec<(i32, String)>> = Mutex::new(Vec::new());
 
 impl LogicalDrive {
     fn enumerate() {
@@ -202,7 +234,6 @@ impl LogicalDrive {
                     data.push((_disk_no, drive_mut.to_string()));
                 }
             }
-            println!("enumerate: {:?}", data);
         }
     }
 
@@ -210,7 +241,7 @@ impl LogicalDrive {
         Self::enumerate();
         let data = SHARED_DATA.lock().unwrap();
         data.iter()
-            .filter(|(n, _)| *n == number)
+            .filter(|(n, _)| number >= 0 && *n == number)
             .map(|(_, text)| text.clone())
             .collect()
     }
@@ -245,6 +276,17 @@ impl PhysicalDisk {
             .enum_child_volumes()
     }
 
+    pub fn path(&self) -> String {
+        self.device_path.clone()
+    }
+
+    pub fn disable(&self) -> CONFIGRET {
+        match self.drives.iter().find(|drive| drive.as_str() == "C:") {
+            Some(_) => CR_NOT_DISABLEABLE,
+            None => self.devinst.disable(),
+        }
+    }
+
     fn get_nsid(&mut self) -> &mut Self {
         if let Some(ref device_id) = self.devinst.instance_id() {
             self.nsid = String::from_utf16_lossy(device_id)
@@ -271,7 +313,7 @@ impl PhysicalDisk {
                 );
                 if ret != CR_SUCCESS {
                     println!(
-                        "get size of {:?}: size {} ret {:?}",
+                        "get size of {:?} failed: size {} ret {:?}",
                         device_id, iface_list_size, ret
                     );
                     return self;
@@ -316,7 +358,7 @@ impl PhysicalDisk {
         self
     }
 
-    pub fn enum_child_volumes(&mut self) -> &mut Self {
+    fn enum_child_volumes(&mut self) -> &mut Self {
         self.drives = LogicalDrive::get_drives(self.disk_number);
         self
     }
@@ -326,8 +368,8 @@ impl fmt::Display for PhysicalDisk {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         write!(
             fmt,
-            " L Disk{:<2}: nsid {} - {:?}",
-            self.disk_number, self.nsid, self.drives
+            " L PhyDisk {:<2} ({}): nsid {} - {:?}",
+            self.disk_number, self.devinst, self.nsid, self.drives
         )
     }
 }
@@ -359,16 +401,14 @@ impl NvmeController {
     }
 
     pub fn inspect(&mut self) -> &mut Self {
-        if let Some(location_info) = self.devinst.location_info() {
-            self.bdf = PciBdf::parse(&location_info).unwrap_or_default();
-        }
+        self.bdf = self.devinst.pcibdf();
         self
     }
 
     pub fn enum_child_disks(&mut self) -> &mut Self {
         unsafe {
             let mut child = 0;
-            let mut result = CM_Get_Child(&mut child, self.devinst.value(), 0);
+            let mut result = CM_Get_Child(&mut child, self.devinst.handle(), 0);
             while result == CR_SUCCESS {
                 if let Some(mut disk) = PhysicalDisk::new(child) {
                     disk.inspect();
@@ -380,8 +420,17 @@ impl NvmeController {
         self
     }
 
-    pub fn add_disk(&mut self, disk: PhysicalDisk) {
-        self.disks.push(disk);
+    pub fn by_num(&self, driveno: i32) -> Option<&PhysicalDisk> {
+        for disk in &self.disks {
+            if disk.disk_number == driveno {
+                return Some(disk);
+            }
+        }
+        None
+    }
+
+    pub fn path(&self) -> String {
+        self.interface_path.clone()
     }
 
     pub fn enable(&self) -> CONFIGRET {
@@ -389,21 +438,29 @@ impl NvmeController {
         if cr == CR_SUCCESS {
             for disk in &self.disks {
                 cr = disk.devinst.enable();
+                std::thread::sleep(std::time::Duration::from_millis(500));
             }
         }
         cr
     }
 
     pub fn disable(&self) -> CONFIGRET {
+        let mut cr = CR_SUCCESS;
         for disk in &self.disks {
-            disk.devinst.disable();
+            cr |= disk.disable();
+            std::thread::sleep(std::time::Duration::from_millis(1000));
         }
-        self.devinst.disable()
+        if cr == CR_SUCCESS {
+            self.devinst.disable()
+        } else {
+            cr
+        }
     }
 
     pub fn remove(&self) -> CONFIGRET {
         for disk in &self.disks {
             disk.devinst.remove();
+            std::thread::sleep(std::time::Duration::from_millis(1000));
         }
         self.devinst.remove()
     }
@@ -411,7 +468,7 @@ impl NvmeController {
     pub fn restart(&self) -> CONFIGRET {
         self.remove();
         let cr = self.devinst.restart();
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::thread::sleep(std::time::Duration::from_millis(500));
         cr
     }
 
@@ -436,11 +493,13 @@ impl fmt::Display for NvmeController {
     fn fmt(&self, fmt: &mut std::fmt::Formatter) -> fmt::Result {
         write!(
             fmt,
-            "DiskController ({}) bdf {} - {}\n",
-            self.devinst, self.bdf, self.interface_path
+            "({}) {}/{}\n",
+            self.devinst,
+            self.devinst.parent().unwrap().pcibdf(),
+            self.bdf
         )?;
         for disk in &self.disks {
-            write!(fmt, "{}\n", disk)?;
+            writeln!(fmt, "{}", disk)?;
         }
         Ok(())
     }
@@ -465,7 +524,7 @@ impl NvmeControllerList {
                 &mut iface_list_size,
                 guid,
                 null_mut(),
-                CM_GET_DEVICE_INTERFACE_LIST_PRESENT,
+                CM_GET_DEVICE_INTERFACE_LIST_ALL_DEVICES,
             ) != CR_SUCCESS
             {
                 return self;
@@ -477,7 +536,7 @@ impl NvmeControllerList {
                 null_mut(),
                 iface_list.as_mut_ptr() as *mut u16,
                 iface_list_size,
-                CM_GET_DEVICE_INTERFACE_LIST_PRESENT,
+                CM_GET_DEVICE_INTERFACE_LIST_ALL_DEVICES,
             ) != CR_SUCCESS
             {
                 return self;
@@ -521,25 +580,26 @@ impl NvmeControllerList {
                     self.controllers.push(controller);
                 }
             }
+            self.controllers.sort_by(|a, b| a.bdf.cmp(&b.bdf));
         }
         self
     }
 
-    pub fn by_num(&mut self, driveno: i32) -> Option<String> {
+    pub fn by_num(&self, driveno: i32) -> Option<&NvmeController> {
         for controller in &self.controllers {
             for disk in &controller.disks {
                 if disk.disk_number == driveno {
-                    return Some(disk.device_path.clone());
+                    return Some(controller);
                 }
             }
         }
         None
     }
 
-    pub fn by_bus(&mut self, bus: i32) -> Option<String> {
+    pub fn by_bus(&self, bus: i32) -> Option<&NvmeController> {
         for controller in &self.controllers {
             if controller.bdf == PciBdf::new(0, bus, 0, 0) {
-                return Some(controller.interface_path.clone());
+                return Some(controller);
             }
         }
         None
@@ -548,8 +608,10 @@ impl NvmeControllerList {
 
 impl fmt::Display for NvmeControllerList {
     fn fmt(&self, fmt: &mut std::fmt::Formatter) -> fmt::Result {
+        let mut index = 0;
         for controller in &self.controllers {
-            write!(fmt, "{}\n", controller)?;
+            write!(fmt, "NVME {}: {}", index, controller)?;
+            index += 1;
         }
         Ok(())
     }

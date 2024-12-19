@@ -41,10 +41,16 @@ fn main() {
         filename = filepath.to_string();
     }
     if let Some(driveno) = args.driveno {
-        filename = controller_list.by_num(driveno).unwrap_or("".into());
+        if let Some(controller) = controller_list.by_num(driveno) {
+            if let Some(disk) = controller.by_num(driveno) {
+                filename = disk.path();
+            }
+        }
     }
     if let Some(busno) = args.busno {
-        filename = controller_list.by_bus(busno).unwrap_or("".into());
+        if let Some(controller) = controller_list.by_bus(busno) {
+            filename = controller.path();
+        }
     }
     if let Some(scsino) = args.scsino {
         let drv_c = disk::get_physical_drv_number_from_logical_drv("C:".to_string());

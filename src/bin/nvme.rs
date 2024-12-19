@@ -1,32 +1,48 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use img_caster::dev::dev_utils::NvmeControllerList;
-use img_caster::dev::disk::{self, Disk};
+use img_caster::dev::disk::Disk;
 
-#[derive(Parser, Default, Debug)]
-#[clap(author, version, about)]
+#[derive(Parser, Default)]
+#[command(author, version, about)]
 /// Sender for Multicast File Transfer
 struct Args {
-    cmd: Option<String>,
-
-    /// File name to transmit data.
-    #[clap(short, long, value_name = "FILE")]
-    filepath: Option<String>,
+    #[command(subcommand)]
+    command: Option<Commands>,
 
     /// PhysicalDrive number. ex) 1 -> "\\.\PhysicalDrive1"
-    #[clap(short, long)]
-    driveno: Option<i32>,
+    #[arg(short, long)]
+    disk: Option<i32>,
 
     /// pci bus number. ex) 3 -> "3:0.0"
-    #[clap(short, long)]
-    busno: Option<i32>,
+    #[arg(short, long)]
+    bus: Option<i32>,
 
-    /// Scsi number. ex) 1 -> "\\.\Scsi1"
-    #[clap(short, long)]
-    scsino: Option<i32>,
+    /// Namespace ID
+    #[arg(short, long)]
+    nsid: Option<i32>,
+}
 
-    /// enable to FUA mode
-    #[clap(long)]
-    fua: Option<bool>,
+#[derive(Subcommand)]
+enum Commands {
+    /// Controller List
+    List {},
+    /// Namespace List
+    Listns {
+        #[arg(short, long)]
+        all: bool,
+    },
+    /// Creates a namespace
+    Create {
+        /// size of ns (NSZE)
+        #[clap(short, long)]
+        size: Option<i32>,
+    },
+    /// Deletes a namespace from the controller
+    Delete {},
+    /// Attaches a namespace to requested controller(s)
+    Attach {},
+    /// Detaches a namespace from requested controller(s)
+    Detach {},
 }
 
 fn main() {
@@ -34,56 +50,37 @@ fn main() {
 
     let mut controller_list = NvmeControllerList::new();
     controller_list.enumerate();
-    println!("{}", controller_list);
 
-    let mut filename = String::from("");
-    if let Some(filepath) = args.filepath.as_deref() {
-        filename = filepath.to_string();
+    let mut controller = None;
+    if let Some(driveno) = args.disk {
+        controller = controller_list.by_num(driveno);
     }
-    if let Some(driveno) = args.driveno {
-        filename = controller_list.by_num(driveno).unwrap_or("".into());
+    if let Some(busno) = args.bus {
+        controller = controller_list.by_bus(busno);
     }
-    if let Some(busno) = args.busno {
-        filename = controller_list.by_bus(busno).unwrap_or("".into());
-    }
-    if let Some(scsino) = args.scsino {
-        let drv_c = disk::get_physical_drv_number_from_logical_drv("C:".to_string());
-        if drv_c == scsino {
-            println!("Can't write to system drive {scsino}");
-        } else {
-            filename = format!("\\\\.\\Scsi{scsino}:");
+
+    match controller {
+        Some(controller) => match &args.command {
+            Some(Commands::List {}) => {
+                println!("{}", controller);
+            }
+            Some(Commands::Listns { all }) => {}
+            Some(Commands::Create { size }) => {
+                controller.rescan();
+            }
+            Some(Commands::Delete {}) => {
+                controller.remove();
+            }
+            Some(Commands::Attach {}) => {
+                controller.enable();
+            }
+            Some(Commands::Detach {}) => {
+                controller.disable();
+            }
+            None => {}
+        },
+        None => {
+            println!("{}", controller_list);
         }
-    }
-
-    // Open file
-    let mut disk = Disk::open(filename, 'w', args.fua);
-    if let Some(ref mut disk) = disk {
-        println!("{:?}", disk);
-        // disk.storage_query_property();
-        // if let Ok(scsi) = disk.get_scsi_address() {
-        //     let scsi_path = format!("\\\\.\\Scsi{scsi}");
-        //     println!("{:?}", scsi_path);
-        // }
-    }
-
-    // let mut data1 = Box::new(vec![0x33u8; 64 * 512]);
-    // let data2 = Box::new(vec![0x55u8; 64 * 512]);
-    if let Some(ref mut _disk) = disk {
-        // if let Err(e) = disk.write(&data1) {
-        //     println!("Disk write Error: {:?}", e);
-        // }
-        // if let Err(e) = disk.read(&mut data) {
-        //     println!("Disk read Error: {:?}", e);
-        // }
-        // if let Err(e) = disk.discovery0() {
-        //     println!("discovery0 Error: {:?}", e);
-        // }
-        // if let Err(e) = disk.scsi_write(&data2) {
-        //     println!("scsi write Error: {:?}", e);
-        // }
-        // if let Err(e) = disk.scsi_read(0, &mut data1) {
-        //     println!("scsi read Error: {:?}", e);
-        // }
-        // println!("read data {:?}", &data1[..512]);
-    }
+    };
 }
