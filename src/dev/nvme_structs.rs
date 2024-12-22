@@ -32,30 +32,6 @@ impl Default for NVME_ERROR_INFO_LOG {
 
 #[repr(C)]
 #[derive(Debug, Default)]
-pub struct StorageProtocolCommand {
-    pub version: u32,
-    pub length: u32,
-    pub protocol_type: u32,
-    pub flags: u32,
-    pub return_status: u32,
-    pub error_code: u32,
-    pub command_length: u32,
-    pub error_info_length: u32,
-    pub data_to_device_transfer_length: u32,
-    pub data_from_device_transfer_length: u32,
-    pub timeout_value: u32,
-    pub error_info_offset: u32,
-    pub data_to_device_buffer_offset: u32,
-    pub data_from_device_buffer_offset: u32,
-    pub command_specific: u32,
-    pub reserved0: u32,
-    pub fixed_protocol_return_data: u32,
-    pub reserved1: [u32; 3],
-    pub command: [u8; 1], // Placeholder for ANYSIZE_ARRAY
-}
-
-#[repr(C)]
-#[derive(Debug, Default)]
 pub struct NvmeCommand {
     pub opcode: u8,
     pub flags: u8,
@@ -78,60 +54,6 @@ pub struct NvmeCommand {
 pub struct NVME_HEALTH_INFO_LOG {
     pub temperature: [u8; 2],
     // Add other fields as necessary
-}
-
-#[repr(C)]
-#[derive(Debug, Default)]
-pub struct StoragePropertyQuery {
-    pub property_id: STORAGE_PROPERTY_ID,
-    pub query_type: STORAGE_QUERY_TYPE,
-    pub additional_parameters: [u8; 1],
-}
-
-#[repr(C)]
-#[derive(Debug, Default)]
-pub struct StorageProtocolSpecificData {
-    pub protocol_type: STORAGE_PROTOCOL_TYPE,
-    pub data_type: u32,
-    pub protocol_data_request_value: u32,
-    pub protocol_data_request_sub_value: u32,
-    pub protocol_data_offset: u32,
-    pub protocol_data_length: u32,
-    pub fixed_protocol_return_data: u32,
-    pub reserved: [u32; 3],
-}
-
-#[repr(C)]
-#[derive(Debug, Default)]
-pub struct StorageProtocolDataDescriptor {
-    pub version: u32,
-    pub size: u32,
-    pub protocol_specific_data: StorageProtocolSpecificData,
-}
-
-#[repr(C)]
-#[derive(Debug, Default)]
-pub struct StoragePropertySet {
-    pub property_id: STORAGE_PROPERTY_ID,
-    pub set_type: STORAGE_SET_TYPE,
-    pub additional_parameters: [u8; 1],
-}
-
-#[repr(C)]
-#[derive(Debug, Default)]
-pub struct StorageProtocolSpecificDataExt {
-    pub protocol_type: STORAGE_PROTOCOL_TYPE,
-    pub data_type: u32,
-    pub protocol_data_value: u32,
-    pub protocol_data_sub_value: u32,
-    pub protocol_data_offset: u32,
-    pub protocol_data_length: u32,
-    pub fixed_protocol_return_data: u32,
-    pub protocol_data_sub_value2: u32,
-    pub protocol_data_sub_value3: u32,
-    pub protocol_data_sub_value4: u32,
-    pub protocol_data_sub_value5: u32,
-    pub reserved: [u32; 5],
 }
 
 #[repr(C)]

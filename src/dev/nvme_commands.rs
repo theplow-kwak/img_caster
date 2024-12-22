@@ -1,5 +1,5 @@
 use crate::dev::nvme_device::*;
-use crate::dev::nvme_structs::{StorageProtocolSpecificDataExt, *};
+use crate::dev::nvme_structs::*;
 use std::{ffi::c_void, ptr::null_mut};
 use windows_sys::Win32::System::Ioctl::*;
 use windows_sys::Win32::System::IO::DeviceIoControl;
@@ -50,7 +50,8 @@ pub fn nvme_identify_query(device: &NvmeDevice) -> Result<(), std::io::Error> {
     }
 
     if protocol_data_descr.Version != std::mem::size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32
-        || protocol_data_descr.Size != std::mem::size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32
+        || protocol_data_descr.Size
+            != std::mem::size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32
     {
         return Err(std::io::Error::new(
             std::io::ErrorKind::Other,
@@ -91,7 +92,7 @@ pub fn nvme_identify_query(device: &NvmeDevice) -> Result<(), std::io::Error> {
 fn nvme_get_log_pages(device: &NvmeDevice) -> Result<(), std::io::Error> {
     let mut buffer: Vec<u8> = vec![
         0;
-        std::mem::size_of::<StoragePropertyQuery>()
+        std::mem::size_of::<STORAGE_PROPERTY_QUERY>()
             - std::mem::size_of::<[u8; 1]>()
             + std::mem::size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>()
             + std::mem::size_of::<NVME_HEALTH_INFO_LOG>()
@@ -134,7 +135,8 @@ fn nvme_get_log_pages(device: &NvmeDevice) -> Result<(), std::io::Error> {
     }
 
     if protocol_data_descr.Version != std::mem::size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32
-        || protocol_data_descr.Size != std::mem::size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32
+        || protocol_data_descr.Size
+            != std::mem::size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32
     {
         return Err(std::io::Error::new(
             std::io::ErrorKind::Other,
@@ -170,30 +172,31 @@ fn nvme_get_log_pages(device: &NvmeDevice) -> Result<(), std::io::Error> {
 }
 
 fn nvme_set_features(device: &NvmeDevice) -> Result<(), std::io::Error> {
-    let buffer_length = std::mem::size_of::<StoragePropertySet>() - std::mem::size_of::<[u8; 1]>()
-        + std::mem::size_of::<StorageProtocolSpecificDataExt>()
+    let buffer_length = std::mem::size_of::<STORAGE_PROPERTY_SET>()
+        - std::mem::size_of::<[u8; 1]>()
+        + std::mem::size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA_EXT>()
         + NVME_MAX_LOG_SIZE;
     let mut buffer: Vec<u8> = vec![0; buffer_length as usize];
 
-    let set_property = unsafe { &mut *(buffer.as_mut_ptr() as *mut StoragePropertySet) };
+    let set_property = unsafe { &mut *(buffer.as_mut_ptr() as *mut STORAGE_PROPERTY_SET) };
     let protocol_data = unsafe {
-        &mut *(set_property.additional_parameters.as_mut_ptr()
-            as *mut StorageProtocolSpecificDataExt)
+        &mut *(set_property.AdditionalParameters.as_mut_ptr()
+            as *mut STORAGE_PROTOCOL_SPECIFIC_DATA_EXT)
     };
 
-    set_property.property_id = StorageAdapterProtocolSpecificProperty;
-    set_property.set_type = PropertyStandardSet;
+    set_property.PropertyId = StorageAdapterProtocolSpecificProperty;
+    set_property.SetType = PropertyStandardSet;
 
-    protocol_data.protocol_type = ProtocolTypeNvme as i32;
-    protocol_data.data_type = NVMeDataTypeFeature as u32;
-    protocol_data.protocol_data_value = NVME_FEATURE_HOST_CONTROLLED_THERMAL_MANAGEMENT;
-    protocol_data.protocol_data_sub_value = 0;
-    protocol_data.protocol_data_sub_value2 = 0;
-    protocol_data.protocol_data_sub_value3 = 0;
-    protocol_data.protocol_data_sub_value4 = 0;
-    protocol_data.protocol_data_sub_value5 = 0;
-    protocol_data.protocol_data_offset = 0;
-    protocol_data.protocol_data_length = 0;
+    protocol_data.ProtocolType = ProtocolTypeNvme as i32;
+    protocol_data.DataType = NVMeDataTypeFeature as u32;
+    protocol_data.ProtocolDataValue = NVME_FEATURE_HOST_CONTROLLED_THERMAL_MANAGEMENT;
+    protocol_data.ProtocolDataSubValue = 0;
+    protocol_data.ProtocolDataSubValue2 = 0;
+    protocol_data.ProtocolDataSubValue3 = 0;
+    protocol_data.ProtocolDataSubValue4 = 0;
+    protocol_data.ProtocolDataSubValue5 = 0;
+    protocol_data.ProtocolDataOffset = 0;
+    protocol_data.ProtocolDataLength = 0;
 
     let mut returned_length = 0;
     let result = unsafe {
