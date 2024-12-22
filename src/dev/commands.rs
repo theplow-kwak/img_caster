@@ -2,6 +2,12 @@ use crate::dev::disk::{get_physical_drv_number_from_logical_drv, ioctl, open};
 use std::ffi::c_void;
 use std::io;
 use std::ptr;
+use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Storage::FileSystem::{
+    CreateFileA, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+};
+use windows_sys::Win32::System::Ioctl::IOCTL_STORAGE_PROTOCOL_COMMAND;
+use windows_sys::Win32::System::IO::DeviceIoControl;
 use windows_sys::{
     core::*,
     Win32::{
@@ -11,10 +17,6 @@ use windows_sys::{
         System::Ioctl::*,
     },
 };
-use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
-use windows_sys::Win32::Storage::FileSystem::{CreateFileA, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING};
-use windows_sys::Win32::System::Ioctl::IOCTL_STORAGE_PROTOCOL_COMMAND;
-use windows_sys::Win32::System::IO::{DeviceIoControl};
 
 #[repr(C)]
 #[derive(Debug, Default)]
@@ -24,15 +26,20 @@ struct StorageProtocolCommand {
     protocol_type: u32,
     flags: u32,
     return_status: u32,
-    error_offset: u32,
+    error_code: u32,
     command_length: u32,
-    command_offset: u32,
-    data_to_device_length: u32,
-    data_to_device_offset: u32,
-    data_from_device_length: u32,
-    data_from_device_offset: u32,
-    timeout_ms: u32,
-    command_specific: [u8; 16],
+    error_info_length: u32,
+    data_to_device_transfer_length: u32,
+    data_from_device_transfer_length: u32,
+    timeout_value: u32,
+    error_info_offset: u32,
+    data_to_device_buffer_offset: u32,
+    data_from_device_buffer_offset: u32,
+    command_specific: u32,
+    reserved0: u32,
+    fixed_protocol_return_data: u32,
+    reserved1: [u32; 3],
+    command: [u8; 1], // Placeholder for ANYSIZE_ARRAY
 }
 
 #[repr(C)]
@@ -56,20 +63,20 @@ struct StorageProtocolDataDescriptor {
 #[repr(C)]
 #[derive(Debug, Default)]
 struct NvmeCommand {
-    opcode: u8,         // 명령 코드
-    flags: u8,          // 명령 플래그
-    nsid: u32,          // 네임스페이스 ID
-    cdw2: u32,          // Command Dword 2
-    cdw3: u32,          // Command Dword 3
-    metadata: u64,      // 메타데이터 주소
-    prp1: u64,          // 데이터 버퍼 주소 1
-    prp2: u64,          // 데이터 버퍼 주소 2
-    cdw10: u32,         // Command Dword 10
-    cdw11: u32,         // Command Dword 11
-    cdw12: u32,         // Command Dword 12
-    cdw13: u32,         // Command Dword 13
-    cdw14: u32,         // Command Dword 14
-    cdw15: u32,         // Command Dword 15
+    opcode: u8,    // 명령 코드
+    flags: u8,     // 명령 플래그
+    nsid: u32,     // 네임스페이스 ID
+    cdw2: u32,     // Command Dword 2
+    cdw3: u32,     // Command Dword 3
+    metadata: u64, // 메타데이터 주소
+    prp1: u64,     // 데이터 버퍼 주소 1
+    prp2: u64,     // 데이터 버퍼 주소 2
+    cdw10: u32,    // Command Dword 10
+    cdw11: u32,    // Command Dword 11
+    cdw12: u32,    // Command Dword 12
+    cdw13: u32,    // Command Dword 13
+    cdw14: u32,    // Command Dword 14
+    cdw15: u32,    // Command Dword 15
 }
 
 const ProtocolTypeUnknown: u32 = 0;
@@ -94,12 +101,15 @@ impl NvmeDevice {
         }
     }
 
-    fn send_command(&self, protocol_command: &mut StorageProtocolCommand, nvme_command: &NvmeCommand) -> io::Result<()> {
-        let mut buffer = vec![0u8;
-            protocol_command.length as usize + protocol_command.command_length as usize
-        ];
+    fn send_command(
+        &self,
+        protocol_command: &mut StorageProtocolCommand,
+        nvme_command: &NvmeCommand,
+    ) -> io::Result<()> {
+        let mut buffer =
+            vec![0u8; protocol_command.length as usize + protocol_command.command_length as usize];
 
-        let command_offset = protocol_command.command_offset as usize;
+        let command_offset = protocol_command.data_to_device_buffer_offset as usize;
         buffer[command_offset..command_offset + std::mem::size_of::<NvmeCommand>()]
             .copy_from_slice(unsafe {
                 std::slice::from_raw_parts(
@@ -125,12 +135,19 @@ impl NvmeDevice {
         if success == 0 {
             Err(io::Error::last_os_error())
         } else {
-            println!("Command executed successfully. Output: {:?}", &buffer[..bytes_returned as usize]);
+            println!(
+                "Command executed successfully. Output: {:?}",
+                &buffer[..bytes_returned as usize]
+            );
             Ok(())
         }
     }
-    
-    fn send_protocol_command(&self, protocol_descriptor: &mut StorageProtocolDataDescriptor, output_buffer: &mut [u8]) -> io::Result<()> {
+
+    fn send_protocol_command(
+        &self,
+        protocol_descriptor: &mut StorageProtocolDataDescriptor,
+        output_buffer: &mut [u8],
+    ) -> io::Result<()> {
         let mut bytes_returned: u32 = 0;
         let success = unsafe {
             DeviceIoControl(
@@ -148,25 +165,29 @@ impl NvmeDevice {
         if success == 0 {
             Err(io::Error::last_os_error())
         } else {
-            println!("Command executed successfully. Output: {:?}", &output_buffer[..bytes_returned as usize]);
+            println!(
+                "Command executed successfully. Output: {:?}",
+                &output_buffer[..bytes_returned as usize]
+            );
             Ok(())
         }
     }
 }
 
-fn send_nvme_identify_command(device_path: &str) -> io::Result<()> {
+fn _send_nvme_identify_command(device_path: &str) -> io::Result<()> {
     let nvme_device = NvmeDevice::open(device_path)?;
 
     let mut protocol_command = StorageProtocolCommand {
         version: 0,
         length: std::mem::size_of::<StorageProtocolCommand>() as u32,
-        protocol_type: 1, // ProtocolTypeNvme
+        protocol_type: ProtocolTypeNvme, // ProtocolTypeNvme
         flags: 0,
         command_length: std::mem::size_of::<NvmeCommand>() as u32,
-        command_offset: std::mem::size_of::<StorageProtocolCommand>() as u32,
-        data_from_device_length: 4096, // Identify command returns 4096 bytes
-        data_from_device_offset: std::mem::size_of::<StorageProtocolCommand>() as u32 + std::mem::size_of::<NvmeCommand>() as u32,
-        timeout_ms: 5000,
+        data_to_device_buffer_offset: std::mem::size_of::<StorageProtocolCommand>() as u32,
+        data_from_device_transfer_length: 4096, // Identify command returns 4096 bytes
+        data_from_device_buffer_offset: std::mem::size_of::<StorageProtocolCommand>() as u32
+            + std::mem::size_of::<NvmeCommand>() as u32,
+        timeout_value: 5000,
         ..Default::default()
     };
 
@@ -180,25 +201,26 @@ fn send_nvme_identify_command(device_path: &str) -> io::Result<()> {
     nvme_device.send_command(&mut protocol_command, &identify_command)
 }
 
-fn send_nvme_get_log_page_command(device_path: &str) -> io::Result<()> {
+fn _send_nvme_get_log_page_command(device_path: &str) -> io::Result<()> {
     let nvme_device = NvmeDevice::open(device_path)?;
 
     let mut protocol_command = StorageProtocolCommand {
         version: 0,
         length: std::mem::size_of::<StorageProtocolCommand>() as u32,
-        protocol_type: 1, // ProtocolTypeNvme
+        protocol_type: ProtocolTypeNvme, // ProtocolTypeNvme
         flags: 0,
         command_length: std::mem::size_of::<NvmeCommand>() as u32,
-        command_offset: std::mem::size_of::<StorageProtocolCommand>() as u32,
-        data_from_device_length: 4096, // Log page size
-        data_from_device_offset: std::mem::size_of::<StorageProtocolCommand>() as u32 + std::mem::size_of::<NvmeCommand>() as u32,
-        timeout_ms: 5000,
+        data_to_device_buffer_offset: std::mem::size_of::<StorageProtocolCommand>() as u32,
+        data_from_device_transfer_length: 4096, // Log page size
+        data_from_device_buffer_offset: std::mem::size_of::<StorageProtocolCommand>() as u32
+            + std::mem::size_of::<NvmeCommand>() as u32,
+        timeout_value: 5000,
         ..Default::default()
     };
 
     let get_log_page_command = NvmeCommand {
-        opcode: 0x02, // Get Log Page opcode
-        nsid: 0,      // Controller-wide log
+        opcode: 0x02,            // Get Log Page opcode
+        nsid: 0,                 // Controller-wide log
         cdw10: (0x02 << 16) | 1, // Log Identifier = 2, Number of Dwords = 1
         ..Default::default()
     };
@@ -212,20 +234,20 @@ fn send_nvme_set_features_command(device_path: &str) -> io::Result<()> {
     let mut protocol_command = StorageProtocolCommand {
         version: 0,
         length: std::mem::size_of::<StorageProtocolCommand>() as u32,
-        protocol_type: 1, // ProtocolTypeNvme
+        protocol_type: ProtocolTypeNvme, // ProtocolTypeNvme
         flags: 0,
         command_length: std::mem::size_of::<NvmeCommand>() as u32,
-        command_offset: std::mem::size_of::<StorageProtocolCommand>() as u32,
-        data_to_device_length: 0,
-        data_to_device_offset: 0,
-        timeout_ms: 5000,
+        data_to_device_buffer_offset: std::mem::size_of::<StorageProtocolCommand>() as u32,
+        data_from_device_transfer_length: 0,
+        data_from_device_buffer_offset: 0,
+        timeout_value: 5000,
         ..Default::default()
     };
 
     let set_features_command = NvmeCommand {
-        opcode: 0x09, // Set Features opcode
-        nsid: 0,      // NSID 0 for global features
-        cdw10: 0x01,  // Feature Identifier: Arbitrary example
+        opcode: 0x09,  // Set Features opcode
+        nsid: 0,       // NSID 0 for global features
+        cdw10: 0x01,   // Feature Identifier: Arbitrary example
         cdw11: 0xABCD, // Feature Value: Example value
         ..Default::default()
     };
@@ -239,19 +261,19 @@ fn send_vendor_specific_command(device_path: &str) -> io::Result<()> {
     let mut protocol_command = StorageProtocolCommand {
         version: 0,
         length: std::mem::size_of::<StorageProtocolCommand>() as u32,
-        protocol_type: 1, // ProtocolTypeNvme
+        protocol_type: ProtocolTypeNvme, // ProtocolTypeNvme
         flags: 0,
         command_length: std::mem::size_of::<NvmeCommand>() as u32,
-        command_offset: std::mem::size_of::<StorageProtocolCommand>() as u32,
-        data_to_device_length: 0,
-        data_to_device_offset: 0,
-        timeout_ms: 5000,
+        data_to_device_buffer_offset: std::mem::size_of::<StorageProtocolCommand>() as u32,
+        data_from_device_transfer_length: 0,
+        data_from_device_buffer_offset: 0,
+        timeout_value: 5000,
         ..Default::default()
     };
 
     let vendor_specific_command = NvmeCommand {
-        opcode: 0xC0, // Vendor-specific opcode
-        nsid: 0,      // Adjust NSID as required
+        opcode: 0xC0,  // Vendor-specific opcode
+        nsid: 0,       // Adjust NSID as required
         cdw10: 0x1234, // Vendor-specific data
         cdw11: 0x5678, // Additional vendor-specific data
         ..Default::default()
@@ -266,13 +288,14 @@ fn send_nvme_get_features_command(device_path: &str) -> io::Result<()> {
     let mut protocol_command = StorageProtocolCommand {
         version: 0,
         length: std::mem::size_of::<StorageProtocolCommand>() as u32,
-        protocol_type: 1, // ProtocolTypeNvme
+        protocol_type: ProtocolTypeNvme, // ProtocolTypeNvme
         flags: 0,
         command_length: std::mem::size_of::<NvmeCommand>() as u32,
-        command_offset: std::mem::size_of::<StorageProtocolCommand>() as u32,
-        data_from_device_length: 4096, // Feature data size
-        data_from_device_offset: std::mem::size_of::<StorageProtocolCommand>() as u32 + std::mem::size_of::<NvmeCommand>() as u32,
-        timeout_ms: 5000,
+        data_to_device_buffer_offset: std::mem::size_of::<StorageProtocolCommand>() as u32,
+        data_from_device_transfer_length: 4096, // Feature data size
+        data_from_device_buffer_offset: std::mem::size_of::<StorageProtocolCommand>() as u32
+            + std::mem::size_of::<NvmeCommand>() as u32,
+        timeout_value: 5000,
         ..Default::default()
     };
 
@@ -290,8 +313,8 @@ fn send_nvme_identify_command(device_path: &str) -> io::Result<()> {
     let nvme_device = NvmeDevice::open(device_path)?;
 
     let mut protocol_specific_data = StorageProtocolSpecificData {
-        protocol_type: 1, // ProtocolTypeNvme
-        data_type: 0,    // NVMe Identify
+        protocol_type: ProtocolTypeNvme, // ProtocolTypeNvme
+        data_type: 0,                    // NVMe Identify
         data_offset: 0,
         data_length: 4096, // Identify returns 4096 bytes
         ..Default::default()
@@ -311,8 +334,8 @@ fn send_nvme_get_log_page_command(device_path: &str) -> io::Result<()> {
     let nvme_device = NvmeDevice::open(device_path)?;
 
     let mut protocol_specific_data = StorageProtocolSpecificData {
-        protocol_type: 1, // ProtocolTypeNvme
-        data_type: 2,    // NVMe Get Log Page
+        protocol_type: ProtocolTypeNvme, // ProtocolTypeNvme
+        data_type: 2,                    // NVMe Get Log Page
         data_offset: 0,
         data_length: 4096, // Log page size
         ..Default::default()

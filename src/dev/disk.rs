@@ -20,9 +20,9 @@ pub fn last_error() -> u32 {
     unsafe { GetLastError() }
 }
 
-pub fn open(path: &String, rw: char) -> isize {
+pub fn open(path: &str, rw: char) -> isize {
     let temphandle = 0;
-    let filename = std::ffi::CString::new(path.as_str()).unwrap();
+    let filename = std::ffi::CString::new(path).unwrap();
     let handle = unsafe {
         CreateFileA(
             filename.as_ptr() as *const u8,
