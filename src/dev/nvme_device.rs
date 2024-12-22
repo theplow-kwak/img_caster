@@ -13,7 +13,7 @@ pub struct NvmeDevice {
 }
 
 impl NvmeDevice {
-    fn open(device_path: &str) -> io::Result<Self> {
+    pub fn open(device_path: &str) -> io::Result<Self> {
         let handle = open(device_path, 'w');
 
         if handle == INVALID_HANDLE_VALUE {

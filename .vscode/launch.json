@@ -18,7 +18,7 @@
             "request": "launch",
             "name": "(Windows) Launch",
             "program": "${workspaceFolder}/target/debug/${fileBasenameNoExtension}.exe",
-            "args": [],
+            "args": ["-b", "5"],
             "cwd": "${workspaceFolder}",
             "externalConsole": true,
         }

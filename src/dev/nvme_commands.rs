@@ -6,7 +6,7 @@ use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::System::Ioctl::*;
 use windows_sys::Win32::System::IO::DeviceIoControl;
 
-fn nvme_identify_query(device: &NvmeDevice) -> Result<(), std::io::Error> {
+pub fn nvme_identify_query(device: &NvmeDevice) -> Result<(), std::io::Error> {
     let mut buffer: Vec<u8> = vec![
         0;
         std::mem::size_of::<STORAGE_PROPERTY_QUERY>()

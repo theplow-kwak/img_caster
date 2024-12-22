@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use img_caster::dev::dev_utils::NvmeControllerList;
-use img_caster::dev::disk::Disk;
+use img_caster::dev::nvme_commands::nvme_identify_query;
+use img_caster::dev::nvme_device::NvmeDevice;
 
 #[derive(Parser, Default)]
 #[command(author, version, about)]
@@ -60,25 +61,29 @@ fn main() {
     }
 
     match controller {
-        Some(controller) => match &args.command {
-            Some(Commands::List {}) => {
-                println!("{}", controller);
+        Some(controller) => {
+            let device = NvmeDevice::open(&controller.path()).unwrap();
+            nvme_identify_query(&device).unwrap();
+            match &args.command {
+                Some(Commands::List {}) => {
+                    println!("{}", controller);
+                }
+                Some(Commands::Listns { all }) => {}
+                Some(Commands::Create { size }) => {
+                    controller.rescan();
+                }
+                Some(Commands::Delete {}) => {
+                    controller.remove();
+                }
+                Some(Commands::Attach {}) => {
+                    controller.enable();
+                }
+                Some(Commands::Detach {}) => {
+                    controller.disable();
+                }
+                None => {}
             }
-            Some(Commands::Listns { all }) => {}
-            Some(Commands::Create { size }) => {
-                controller.rescan();
-            }
-            Some(Commands::Delete {}) => {
-                controller.remove();
-            }
-            Some(Commands::Attach {}) => {
-                controller.enable();
-            }
-            Some(Commands::Detach {}) => {
-                controller.disable();
-            }
-            None => {}
-        },
+        }
         None => {
             println!("{}", controller_list);
         }
