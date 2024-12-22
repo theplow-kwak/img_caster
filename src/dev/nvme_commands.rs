@@ -1,8 +1,6 @@
-use crate::dev::disk::open;
 use crate::dev::nvme_device::*;
-use crate::dev::nvme_structs::{ProtocolTypeNvme, StorageProtocolSpecificDataExt, *};
+use crate::dev::nvme_structs::{StorageProtocolSpecificDataExt, *};
 use std::{ffi::c_void, ptr::null_mut};
-use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::System::Ioctl::*;
 use windows_sys::Win32::System::IO::DeviceIoControl;
 
@@ -11,27 +9,27 @@ pub fn nvme_identify_query(device: &NvmeDevice) -> Result<(), std::io::Error> {
         0;
         std::mem::size_of::<STORAGE_PROPERTY_QUERY>()
             - std::mem::size_of::<[u8; 1]>()
-            + std::mem::size_of::<StorageProtocolSpecificData>()
+            + std::mem::size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>()
             + NVME_MAX_LOG_SIZE
     ];
     let buffer_length = buffer.len() as u32;
 
-    let query = unsafe { &mut *(buffer.as_mut_ptr() as *mut StoragePropertyQuery) };
+    let query = unsafe { &mut *(buffer.as_mut_ptr() as *mut STORAGE_PROPERTY_QUERY) };
     let protocol_data_descr =
-        unsafe { &mut *(buffer.as_mut_ptr() as *mut StorageProtocolDataDescriptor) };
+        unsafe { &mut *(buffer.as_mut_ptr() as *mut STORAGE_PROTOCOL_DATA_DESCRIPTOR) };
     let protocol_data = unsafe {
-        &mut *(query.additional_parameters.as_mut_ptr() as *mut StorageProtocolSpecificData)
+        &mut *(query.AdditionalParameters.as_mut_ptr() as *mut STORAGE_PROTOCOL_SPECIFIC_DATA)
     };
 
-    query.property_id = StorageAdapterProtocolSpecificProperty;
-    query.query_type = PropertyStandardQuery;
+    query.PropertyId = StorageAdapterProtocolSpecificProperty;
+    query.QueryType = PropertyStandardQuery;
 
-    protocol_data.protocol_type = ProtocolTypeNvme as i32;
-    protocol_data.data_type = NVMeDataTypeIdentify as u32;
-    protocol_data.protocol_data_request_value = NVME_IDENTIFY_CNS_CONTROLLER;
-    protocol_data.protocol_data_request_sub_value = 0;
-    protocol_data.protocol_data_offset = std::mem::size_of::<StorageProtocolSpecificData>() as u32;
-    protocol_data.protocol_data_length = NVME_MAX_LOG_SIZE as u32;
+    protocol_data.ProtocolType = ProtocolTypeNvme as i32;
+    protocol_data.DataType = NVMeDataTypeIdentify as u32;
+    protocol_data.ProtocolDataRequestValue = NVME_IDENTIFY_CNS_CONTROLLER;
+    protocol_data.ProtocolDataRequestSubValue = 0;
+    protocol_data.ProtocolDataOffset = std::mem::size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() as u32;
+    protocol_data.ProtocolDataLength = NVME_MAX_LOG_SIZE as u32;
 
     let mut returned_length = 0;
     let result = unsafe {
@@ -51,8 +49,8 @@ pub fn nvme_identify_query(device: &NvmeDevice) -> Result<(), std::io::Error> {
         return Err(std::io::Error::last_os_error());
     }
 
-    if protocol_data_descr.version != std::mem::size_of::<StorageProtocolDataDescriptor>() as u32
-        || protocol_data_descr.size != std::mem::size_of::<StorageProtocolDataDescriptor>() as u32
+    if protocol_data_descr.Version != std::mem::size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32
+        || protocol_data_descr.Size != std::mem::size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32
     {
         return Err(std::io::Error::new(
             std::io::ErrorKind::Other,
@@ -60,11 +58,11 @@ pub fn nvme_identify_query(device: &NvmeDevice) -> Result<(), std::io::Error> {
         ));
     }
 
-    let protocol_data = &protocol_data_descr.protocol_specific_data;
+    let protocol_data = &protocol_data_descr.ProtocolSpecificData;
 
-    if protocol_data.protocol_data_offset
-        < std::mem::size_of::<StorageProtocolSpecificData>() as u32
-        || protocol_data.protocol_data_length < NVME_MAX_LOG_SIZE as u32
+    if protocol_data.ProtocolDataOffset
+        < std::mem::size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() as u32
+        || protocol_data.ProtocolDataLength < NVME_MAX_LOG_SIZE as u32
     {
         return Err(std::io::Error::new(
             std::io::ErrorKind::Other,
@@ -75,7 +73,7 @@ pub fn nvme_identify_query(device: &NvmeDevice) -> Result<(), std::io::Error> {
     let identify_controller_data = unsafe {
         &*(buffer
             .as_ptr()
-            .add(protocol_data.protocol_data_offset as usize)
+            .add(protocol_data.ProtocolDataOffset as usize)
             as *const NvmeIdentifyControllerData)
     };
 
@@ -95,27 +93,27 @@ fn nvme_get_log_pages(device: &NvmeDevice) -> Result<(), std::io::Error> {
         0;
         std::mem::size_of::<StoragePropertyQuery>()
             - std::mem::size_of::<[u8; 1]>()
-            + std::mem::size_of::<StorageProtocolSpecificData>()
+            + std::mem::size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>()
             + std::mem::size_of::<NVME_HEALTH_INFO_LOG>()
     ];
     let buffer_length = buffer.len() as u32;
 
-    let query = unsafe { &mut *(buffer.as_mut_ptr() as *mut StoragePropertyQuery) };
+    let query = unsafe { &mut *(buffer.as_mut_ptr() as *mut STORAGE_PROPERTY_QUERY) };
     let protocol_data_descr =
-        unsafe { &mut *(buffer.as_mut_ptr() as *mut StorageProtocolDataDescriptor) };
+        unsafe { &mut *(buffer.as_mut_ptr() as *mut STORAGE_PROTOCOL_DATA_DESCRIPTOR) };
     let protocol_data = unsafe {
-        &mut *(query.additional_parameters.as_mut_ptr() as *mut StorageProtocolSpecificData)
+        &mut *(query.AdditionalParameters.as_mut_ptr() as *mut STORAGE_PROTOCOL_SPECIFIC_DATA)
     };
 
-    query.property_id = StorageDeviceProtocolSpecificProperty;
-    query.query_type = PropertyStandardQuery;
+    query.PropertyId = StorageDeviceProtocolSpecificProperty;
+    query.QueryType = PropertyStandardQuery;
 
-    protocol_data.protocol_type = ProtocolTypeNvme as i32;
-    protocol_data.data_type = NVMeDataTypeLogPage as u32;
-    protocol_data.protocol_data_request_value = NVME_LOG_PAGE_HEALTH_INFO;
-    protocol_data.protocol_data_request_sub_value = 0;
-    protocol_data.protocol_data_offset = std::mem::size_of::<StorageProtocolSpecificData>() as u32;
-    protocol_data.protocol_data_length = std::mem::size_of::<NVME_HEALTH_INFO_LOG>() as u32;
+    protocol_data.ProtocolType = ProtocolTypeNvme as i32;
+    protocol_data.DataType = NVMeDataTypeLogPage as u32;
+    protocol_data.ProtocolDataRequestValue = NVME_LOG_PAGE_HEALTH_INFO;
+    protocol_data.ProtocolDataRequestSubValue = 0;
+    protocol_data.ProtocolDataOffset = std::mem::size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() as u32;
+    protocol_data.ProtocolDataLength = std::mem::size_of::<NVME_HEALTH_INFO_LOG>() as u32;
 
     let mut returned_length = 0;
     let result = unsafe {
@@ -135,8 +133,8 @@ fn nvme_get_log_pages(device: &NvmeDevice) -> Result<(), std::io::Error> {
         return Err(std::io::Error::last_os_error());
     }
 
-    if protocol_data_descr.version != std::mem::size_of::<StorageProtocolDataDescriptor>() as u32
-        || protocol_data_descr.size != std::mem::size_of::<StorageProtocolDataDescriptor>() as u32
+    if protocol_data_descr.Version != std::mem::size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32
+        || protocol_data_descr.Size != std::mem::size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32
     {
         return Err(std::io::Error::new(
             std::io::ErrorKind::Other,
@@ -144,11 +142,11 @@ fn nvme_get_log_pages(device: &NvmeDevice) -> Result<(), std::io::Error> {
         ));
     }
 
-    let protocol_data = &protocol_data_descr.protocol_specific_data;
+    let protocol_data = &protocol_data_descr.ProtocolSpecificData;
 
-    if protocol_data.protocol_data_offset
-        < std::mem::size_of::<StorageProtocolSpecificData>() as u32
-        || protocol_data.protocol_data_length < std::mem::size_of::<NVME_HEALTH_INFO_LOG>() as u32
+    if protocol_data.ProtocolDataOffset
+        < std::mem::size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() as u32
+        || protocol_data.ProtocolDataLength < std::mem::size_of::<NVME_HEALTH_INFO_LOG>() as u32
     {
         return Err(std::io::Error::new(
             std::io::ErrorKind::Other,
@@ -159,7 +157,7 @@ fn nvme_get_log_pages(device: &NvmeDevice) -> Result<(), std::io::Error> {
     let smart_info = unsafe {
         &*(buffer
             .as_ptr()
-            .add(protocol_data.protocol_data_offset as usize)
+            .add(protocol_data.ProtocolDataOffset as usize)
             as *const NVME_HEALTH_INFO_LOG)
     };
 

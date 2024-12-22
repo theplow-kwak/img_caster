@@ -1,7 +1,6 @@
 use crate::dev::disk::open;
 use crate::dev::nvme_structs::*;
 use std::ffi::c_void;
-use crate::dev::nvme_structs::ProtocolTypeNvme;
 use std::io;
 use std::ptr::null_mut;
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
@@ -32,7 +31,7 @@ impl NvmeDevice {
             unsafe { &mut *(buffer.as_mut_ptr() as *mut StorageProtocolCommand) };
         protocol_command.version = STORAGE_PROTOCOL_STRUCTURE_VERSION;
         protocol_command.length = std::mem::size_of::<StorageProtocolCommand>() as u32;
-        protocol_command.protocol_type = ProtocolTypeNvme;
+        protocol_command.protocol_type = ProtocolTypeNvme as u32;
         protocol_command.flags = STORAGE_PROTOCOL_COMMAND_FLAG_ADAPTER_REQUEST;
         protocol_command.command_length = STORAGE_PROTOCOL_COMMAND_LENGTH_NVME;
         protocol_command.error_info_length = std::mem::size_of::<NVME_ERROR_INFO_LOG>() as u32;

@@ -195,10 +195,3 @@ pub const NVME_LOG_PAGE_HEALTH_INFO: u32 = 2;
 pub const NVME_MAX_LOG_SIZE: usize = 4096;
 pub const NVME_FEATURE_HOST_CONTROLLED_THERMAL_MANAGEMENT: u32 = 0x10;
 pub const NVME_FEATURE_TEMPERATURE_THRESHOLD: u32 = 0x11;
-
-pub const ProtocolTypeUnknown: u32 = 0;
-pub const ProtocolTypeScsi: u32 = 1;
-pub const ProtocolTypeAta: u32 = 2;
-pub const ProtocolTypeNvme: u32 = 3;
-pub const ProtocolTypeSd: u32 = 4;
-pub const ProtocolTypeUfs: u32 = 5;
