@@ -8,7 +8,7 @@ use windows_sys::{
 use std::{
     ffi::c_void,
     fmt,
-    io::{Read, Write},
+    io::{self, Read, Write},
     mem::{size_of_val, zeroed},
     ptr::{null, null_mut},
 };
@@ -21,7 +21,6 @@ pub fn last_error() -> u32 {
 }
 
 pub fn open(path: &str, rw: char) -> isize {
-    let temphandle = 0;
     let filename = std::ffi::CString::new(path).unwrap();
     let handle = unsafe {
         CreateFileA(
@@ -39,7 +38,7 @@ pub fn open(path: &str, rw: char) -> isize {
                 OPEN_EXISTING
             },
             FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH,
-            temphandle,
+            0,
         )
     };
     handle
@@ -50,7 +49,7 @@ pub fn ioctl(
     control_code: u32,
     in_buffer: Option<(*const c_void, usize)>,
     out_buffer: Option<(*mut c_void, usize)>,
-) -> std::io::Result<usize> {
+) -> io::Result<usize> {
     let mut bytes_returned = 0u32;
     let (in_buffer, in_buffer_size) = in_buffer.unwrap_or((null(), 0));
     let (out_buffer, out_buffer_size) = out_buffer.unwrap_or((null_mut(), 0));
@@ -67,8 +66,8 @@ pub fn ioctl(
         )
     };
     if ok == 0 {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        Err(io::Error::new(
+            io::ErrorKind::Other,
             format!("Error code: {:#08x}", last_error()),
         ))
     } else {
@@ -166,7 +165,7 @@ impl Disk {
         }
     }
 
-    pub fn get_scsi_address(&self) -> std::io::Result<u8> {
+    pub fn get_scsi_address(&self) -> io::Result<u8> {
         let mut scsi_addr: SCSI_ADDRESS = unsafe { zeroed() };
         if let Ok(_r) = ioctl(
             self.handle,
@@ -183,8 +182,8 @@ impl Disk {
             );
             Ok(scsi_addr.PathId)
         } else {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            Err(io::Error::new(
+                io::ErrorKind::Other,
                 format!("Error code: {:#08x}", last_error()),
             ))
         }
@@ -222,7 +221,7 @@ impl Disk {
         }
     }
 
-    pub fn scsi_pass_through_direct(&mut self) -> std::io::Result<usize> {
+    pub fn scsi_pass_through_direct(&mut self) -> io::Result<usize> {
         ioctl(
             self.handle,
             IOCTL_SCSI_PASS_THROUGH_DIRECT,
@@ -237,12 +236,7 @@ impl Disk {
         )
     }
 
-    pub fn security_recv(
-        &mut self,
-        protocol: u8,
-        com_id: u16,
-        buf: &[u8],
-    ) -> std::io::Result<usize> {
+    pub fn security_recv(&mut self, protocol: u8, com_id: u16, buf: &[u8]) -> io::Result<usize> {
         let cdb = ScsiSecCdb12::new(
             ScsiOpcode::SCSI_OPCODE_SECURITY_RECV,
             protocol,
@@ -256,12 +250,7 @@ impl Disk {
         self.scsi_pass_through_direct()
     }
 
-    pub fn security_send(
-        &mut self,
-        protocol: u8,
-        com_id: u16,
-        buf: &[u8],
-    ) -> std::io::Result<usize> {
+    pub fn security_send(&mut self, protocol: u8, com_id: u16, buf: &[u8]) -> io::Result<usize> {
         let cdb = ScsiSecCdb12::new(
             ScsiOpcode::SCSI_OPCODE_SECURITY_SEND,
             protocol,
@@ -275,7 +264,7 @@ impl Disk {
         self.scsi_pass_through_direct()
     }
 
-    pub fn discovery0(&mut self) -> std::io::Result<usize> {
+    pub fn discovery0(&mut self) -> io::Result<usize> {
         let buff = Box::new(vec![0x0u8; 4096]);
         let res = self.security_recv(0x01, 0x0001, &buff);
         println!("discovery0 {:?}", &buff[..512]);
@@ -301,7 +290,7 @@ impl Disk {
         }
     }
 
-    pub fn scsi_read(&mut self, offset: u64, buf: &[u8]) -> std::io::Result<usize> {
+    pub fn scsi_read(&mut self, offset: u64, buf: &[u8]) -> io::Result<usize> {
         if buf.len() <= 0 {
             return Ok(0);
         }
@@ -318,7 +307,7 @@ impl Disk {
     }
 
     #[allow(unused_assignments)]
-    pub fn scsi_write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+    pub fn scsi_write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if buf.len() <= 0 {
             return Ok(0);
         }
@@ -337,8 +326,8 @@ impl Disk {
 
         let res = self.scsi_pass_through_direct();
         match res {
-            Err(_err) => Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            Err(_err) => Err(io::Error::new(
+                io::ErrorKind::Other,
                 format!("Error code: {:#08x}", last_error()),
             )),
             Ok(_wb) => {
@@ -350,7 +339,7 @@ impl Disk {
 }
 
 impl Read for Disk {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let mut bytes_read = 0u32;
         let res = unsafe {
             ReadFile(
@@ -362,8 +351,8 @@ impl Read for Disk {
             )
         };
         if res == 0 {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            Err(io::Error::new(
+                io::ErrorKind::Other,
                 format!("Error code: {:#08x}", last_error()),
             ))
         } else {
@@ -373,7 +362,7 @@ impl Read for Disk {
 }
 
 impl Write for Disk {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if buf.len() <= 0 {
             return Ok(0);
         }
@@ -390,8 +379,8 @@ impl Write for Disk {
             )
         };
         if res == 0 {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            Err(io::Error::new(
+                io::ErrorKind::Other,
                 format!("Error code: {:#08x}", last_error()),
             ))
         } else {
@@ -399,7 +388,7 @@ impl Write for Disk {
         }
     }
 
-    fn flush(&mut self) -> std::io::Result<()> {
+    fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
 }

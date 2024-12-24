@@ -1,8 +1,6 @@
 use crate::dev::disk::open;
 use crate::dev::nvme_structs::*;
-use std::ffi::c_void;
-use std::io;
-use std::ptr::null_mut;
+use std::{ffi::c_void, io, mem::size_of, ptr::null_mut};
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::System::Ioctl::*;
 use windows_sys::Win32::System::IO::DeviceIoControl;
@@ -26,18 +24,18 @@ impl NvmeDevice {
         self.handle
     }
 
-    fn send_vendor_specific_command(&self, buffer: &mut [u8]) -> Result<(), std::io::Error> {
+    fn send_vendor_specific_command(&self, buffer: &mut [u8]) -> Result<(), io::Error> {
         let protocol_command =
             unsafe { &mut *(buffer.as_mut_ptr() as *mut STORAGE_PROTOCOL_COMMAND) };
         protocol_command.Version = STORAGE_PROTOCOL_STRUCTURE_VERSION;
-        protocol_command.Length = std::mem::size_of::<STORAGE_PROTOCOL_COMMAND>() as u32;
+        protocol_command.Length = size_of::<STORAGE_PROTOCOL_COMMAND>() as u32;
         protocol_command.ProtocolType = ProtocolTypeNvme as i32;
         protocol_command.Flags = STORAGE_PROTOCOL_COMMAND_FLAG_ADAPTER_REQUEST;
         protocol_command.CommandLength = STORAGE_PROTOCOL_COMMAND_LENGTH_NVME;
-        protocol_command.ErrorInfoLength = std::mem::size_of::<NVME_ERROR_INFO_LOG>() as u32;
+        protocol_command.ErrorInfoLength = size_of::<NVME_ERROR_INFO_LOG>() as u32;
         protocol_command.DataFromDeviceTransferLength = 4096;
         protocol_command.TimeOutValue = 10;
-        protocol_command.ErrorInfoOffset = std::mem::size_of::<STORAGE_PROTOCOL_COMMAND>() as u32;
+        protocol_command.ErrorInfoOffset = size_of::<STORAGE_PROTOCOL_COMMAND>() as u32;
         protocol_command.DataFromDeviceBufferOffset =
             protocol_command.ErrorInfoOffset + protocol_command.ErrorInfoLength;
         protocol_command.CommandSpecific = STORAGE_PROTOCOL_SPECIFIC_NVME_ADMIN_COMMAND;
@@ -63,13 +61,13 @@ impl NvmeDevice {
         };
 
         if result == 0 {
-            Err(std::io::Error::last_os_error())
+            Err(io::Error::last_os_error())
         } else {
             Ok(())
         }
     }
 
-    pub fn send_command(
+    pub fn pass_through(
         &self,
         protocol_command: &mut STORAGE_PROTOCOL_COMMAND,
         nvme_command: &NvmeCommand,
@@ -78,13 +76,12 @@ impl NvmeDevice {
             vec![0u8; protocol_command.Length as usize + protocol_command.CommandLength as usize];
 
         let command_offset = protocol_command.DataToDeviceBufferOffset as usize;
-        buffer[command_offset..command_offset + std::mem::size_of::<NvmeCommand>()]
-            .copy_from_slice(unsafe {
-                std::slice::from_raw_parts(
-                    nvme_command as *const _ as *const u8,
-                    std::mem::size_of::<NvmeCommand>(),
-                )
-            });
+        buffer[command_offset..command_offset + size_of::<NvmeCommand>()].copy_from_slice(unsafe {
+            std::slice::from_raw_parts(
+                nvme_command as *const _ as *const u8,
+                size_of::<NvmeCommand>(),
+            )
+        });
 
         let mut bytes_returned: u32 = 0;
         let success = unsafe {
@@ -111,9 +108,9 @@ impl NvmeDevice {
         }
     }
 
-    pub fn send_protocol_command(
+    pub fn query(
         &self,
-        protocol_descriptor: &mut STORAGE_PROTOCOL_DATA_DESCRIPTOR,
+        protocol_data_descr: &mut STORAGE_PROTOCOL_DATA_DESCRIPTOR,
         output_buffer: &mut [u8],
     ) -> io::Result<()> {
         let mut bytes_returned: u32 = 0;
@@ -121,8 +118,8 @@ impl NvmeDevice {
             DeviceIoControl(
                 self.handle,
                 IOCTL_STORAGE_QUERY_PROPERTY,
-                protocol_descriptor as *mut _ as *mut c_void,
-                std::mem::size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32,
+                protocol_data_descr as *mut _ as *mut c_void,
+                size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32,
                 output_buffer.as_mut_ptr() as *mut c_void,
                 output_buffer.len() as u32,
                 &mut bytes_returned,

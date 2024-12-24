@@ -1,9 +1,7 @@
 use byte_unit::Byte;
 use log::{info, trace, warn};
 use std::collections::HashMap;
-use std::io;
-use std::io::Write;
-use std::io::{Error, ErrorKind};
+use std::io::{self, Error, ErrorKind, Write};
 use std::net::SocketAddrV4;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -233,7 +231,7 @@ impl McastSender {
                 embps % 1000
             );
             self.written_elaps = writtenbytes;
-            let _ = std::io::stdout().flush();
+            let _ = io::stdout().flush();
             self.elaps_time = Instant::now();
             self.socket.packet_count = 0;
         }
@@ -457,7 +455,7 @@ impl McastSender {
                 Message::CmdRetransmit(m) => return Ok(self.handle_retransmit(&m, remain)),
                 _ => Err("Received an unexpected message."),
             },
-            Err(ref err) if err.kind() == std::io::ErrorKind::TimedOut => {
+            Err(ref err) if err.kind() == io::ErrorKind::TimedOut => {
                 return Ok(true);
             }
             Err(_err) => return Err("Unexpected error!!"),
