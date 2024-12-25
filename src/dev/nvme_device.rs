@@ -1,5 +1,5 @@
 use crate::dev::disk::open;
-use crate::dev::nvme_structs::*;
+use crate::dev::nvme_define::*;
 use std::{ffi::c_void, io, mem::size_of, ptr::null_mut};
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::System::Ioctl::*;
@@ -40,11 +40,11 @@ impl NvmeDevice {
             protocol_command.ErrorInfoOffset + protocol_command.ErrorInfoLength;
         protocol_command.CommandSpecific = STORAGE_PROTOCOL_SPECIFIC_NVME_ADMIN_COMMAND;
 
-        let command = unsafe { &mut *(protocol_command.Command.as_mut_ptr() as *mut NvmeCommand) };
-        command.opcode = 0xFF;
-        command.cdw10 = 0; // to_fill_in
-        command.cdw12 = 0; // to_fill_in
-        command.cdw13 = 0; // to_fill_in
+        let command = unsafe { &mut *(protocol_command.Command.as_mut_ptr() as *mut NVME_COMMAND) };
+        command.CDW0.OPC = 0xFF;
+        command.u.GENERAL.CDW10 = 0; // to_fill_in
+        command.u.GENERAL.CDW12 = 0; // to_fill_in
+        command.u.GENERAL.CDW13 = 0; // to_fill_in
 
         let mut returned_length = 0;
         let result = unsafe {
@@ -70,18 +70,20 @@ impl NvmeDevice {
     pub fn pass_through(
         &self,
         protocol_command: &mut STORAGE_PROTOCOL_COMMAND,
-        nvme_command: &NvmeCommand,
+        nvme_command: &NVME_COMMAND,
     ) -> io::Result<()> {
         let mut buffer =
             vec![0u8; protocol_command.Length as usize + protocol_command.CommandLength as usize];
 
         let command_offset = protocol_command.DataToDeviceBufferOffset as usize;
-        buffer[command_offset..command_offset + size_of::<NvmeCommand>()].copy_from_slice(unsafe {
-            std::slice::from_raw_parts(
-                nvme_command as *const _ as *const u8,
-                size_of::<NvmeCommand>(),
-            )
-        });
+        buffer[command_offset..command_offset + size_of::<NVME_COMMAND>()].copy_from_slice(
+            unsafe {
+                std::slice::from_raw_parts(
+                    nvme_command as *const _ as *const u8,
+                    size_of::<NVME_COMMAND>(),
+                )
+            },
+        );
 
         let mut bytes_returned: u32 = 0;
         let success = unsafe {
