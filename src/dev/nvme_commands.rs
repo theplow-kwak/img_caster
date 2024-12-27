@@ -1,5 +1,6 @@
 use crate::dev::nvme_define::*;
 use crate::dev::nvme_device::*;
+use std::mem::offset_of;
 use std::{
     ffi::c_void,
     io,
@@ -9,24 +10,20 @@ use std::{
 use windows_sys::Win32::System::Ioctl::*;
 use windows_sys::Win32::System::IO::DeviceIoControl;
 
-pub fn nvme_identify_query(device: &NvmeDevice) -> io::Result<()> {
-    let mut buffer: Vec<u8> = vec![
-        0;
-        size_of::<STORAGE_PROPERTY_QUERY>() - size_of::<[u8; 1]>()
-            + size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>()
-            + NVME_MAX_LOG_SIZE
-    ];
+pub fn nvme_identify_query(device: &NvmeDevice) -> io::Result<NVME_IDENTIFY_CONTROLLER_DATA> {
+    let data_offset = offset_of!(STORAGE_PROPERTY_QUERY, AdditionalParameters);
+    let mut buffer: Vec<u8> =
+        vec![0; data_offset + size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() + NVME_MAX_LOG_SIZE];
     let buffer_length = buffer.len() as u32;
 
-    let query = unsafe { &mut *(buffer.as_mut_ptr() as *mut STORAGE_PROPERTY_QUERY) };
-    let protocol_data_descr =
-        unsafe { &mut *(buffer.as_mut_ptr() as *mut STORAGE_PROTOCOL_DATA_DESCRIPTOR) };
+    let query_command = unsafe { &mut *(buffer.as_mut_ptr() as *mut STORAGE_PROPERTY_QUERY) };
     let protocol_data = unsafe {
-        &mut *(query.AdditionalParameters.as_mut_ptr() as *mut STORAGE_PROTOCOL_SPECIFIC_DATA)
+        &mut *(query_command.AdditionalParameters.as_mut_ptr()
+            as *mut STORAGE_PROTOCOL_SPECIFIC_DATA)
     };
 
-    query.PropertyId = StorageAdapterProtocolSpecificProperty;
-    query.QueryType = PropertyStandardQuery;
+    query_command.PropertyId = StorageAdapterProtocolSpecificProperty;
+    query_command.QueryType = PropertyStandardQuery;
 
     protocol_data.ProtocolType = ProtocolTypeNvme as i32;
     protocol_data.DataType = NVMeDataTypeIdentify as u32;
@@ -53,6 +50,8 @@ pub fn nvme_identify_query(device: &NvmeDevice) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
 
+    let protocol_data_descr =
+        unsafe { &mut *(buffer.as_mut_ptr() as *mut STORAGE_PROTOCOL_DATA_DESCRIPTOR) };
     if protocol_data_descr.Version != size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32
         || protocol_data_descr.Size != size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32
     {
@@ -87,16 +86,13 @@ pub fn nvme_identify_query(device: &NvmeDevice) -> io::Result<()> {
     }
 
     println!("***Identify Controller Data succeeded***");
-    Ok(())
+    Ok(*identify_controller_data)
 }
 
 pub fn nvme_get_log_pages(device: &NvmeDevice) -> io::Result<()> {
-    let mut buffer: Vec<u8> = vec![
-        0;
-        size_of::<STORAGE_PROPERTY_QUERY>() - size_of::<[u8; 1]>()
-            + size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>()
-            + size_of::<NVME_HEALTH_INFO_LOG>()
-    ];
+    let command_offset = offset_of!(STORAGE_PROPERTY_QUERY, AdditionalParameters);
+    let mut buffer: Vec<u8> =
+        vec![0; command_offset + size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() + NVME_MAX_LOG_SIZE];
     let buffer_length = buffer.len() as u32;
 
     let query = unsafe { &mut *(buffer.as_mut_ptr() as *mut STORAGE_PROPERTY_QUERY) };
@@ -287,24 +283,26 @@ pub fn nvme_set_features(device: &NvmeDevice) -> io::Result<()> {
 }
 
 // Example Enum Definitions (actual values and types may vary)
+#[repr(u8)]
 #[derive(Debug)]
 pub enum NvmeOpcodeType {
-    Write,
-    NoBuffer,
-    // Add more variants as needed
+    NOBUFFER,
+    WRITE,
+    READ,
+    READWRITE,
 }
 
+#[repr(u8)]
 #[derive(Debug, Copy, Clone)]
 pub enum NvmeVscOpcode {
-    Write,
-    Read,
-    None,
-    // Add more variants as needed
+    None = 0x00,
+    Write = 0x01,
+    Read = 0x02,
 }
 
 impl Default for NvmeVscOpcode {
     fn default() -> Self {
-        NvmeVscOpcode::Write
+        NvmeVscOpcode::None
     }
 }
 
@@ -346,15 +344,12 @@ const VS_STD_NVME_CMD_TYPE_NON_DATA: u32 = 2;
 pub fn nvme_send_vsc2_passthrough_command(
     p_nd: &NvmeDisk,
     sub_opcode: u32, // Adjust type if necessary
-    direction: i32,
+    direction: u8,
     p_param_buf: &[u8],
     p_data_buf: &[u8],
-    p_ncs: Option<&mut NVME_COMMAND_STATUS>,
     p_completion_dw0: Option<&mut u32>,
     nsid: u32, // Adjust type if necessary
-) -> io::Result<()> {
-    let mut default_ncs = NVME_COMMAND_STATUS::default();
-    let mut ncs = p_ncs.unwrap_or(&mut default_ncs);
+) -> io::Result<NVME_COMMAND_STATUS> {
     let mut default_completion_dw0 = 0;
     let mut completion_dw0 = p_completion_dw0.unwrap_or(&mut default_completion_dw0);
 
@@ -367,38 +362,37 @@ pub fn nvme_send_vsc2_passthrough_command(
     nc.u.GENERAL.CDW14 = 0;
     nc.NSID = nsid;
 
-    let err = nvme_send_passthrough_command(
+    let result = nvme_send_passthrough_command(
         p_nd,
-        NvmeOpcodeType::Write,
+        NvmeOpcodeType::WRITE as u8,
         &nc,
         p_param_buf,
-        ncs,
         completion_dw0,
     );
-    if err.is_err() || direction == 0 {
-        return err;
-    }
-    if ncs.SCT != NvmeStatusType::GenericCommand as u16
-        || ncs.SC != NvmeStatus::SuccessCompletion as u16
+    let ncs = match result {
+        Ok(ncs) => ncs,
+        Err(e) => return Err(e),
+    };
+    if direction == 0
+        || ncs.SCT() != NVME_STATUS_TYPES::NVME_STATUS_TYPE_GENERIC_COMMAND as u16
+        || ncs.SC() != NVME_STATUS_GENERIC_COMMAND_CODES::NVME_STATUS_SUCCESS_COMPLETION as u16
     {
-        return Err(io::Error::new(io::ErrorKind::Other, "Not Supported"));
+        return result;
     }
 
     // Data phase
-    nc.CDW0.OPC = match direction {
-        1 => NvmeVscOpcode::Write as u8,
-        2 => NvmeVscOpcode::Read as u8, // Adjust based on actual logic
-        _ => return Err(io::Error::new(io::ErrorKind::Other, "Not Supported")),
-    };
+    nc.CDW0.OPC = NvmeVscOpcode::None as u8 | direction;
     nc.u.GENERAL.CDW10 = p_data_buf.len() as u32 / size_of::<u32>() as u32;
+    nc.u.GENERAL.CDW11 = 0;
+    nc.u.GENERAL.CDW12 = set_vsc_op_code_by_project_type(p_nd.project_type.clone(), sub_opcode); // Adjust return type and function call if necessary
+    nc.u.GENERAL.CDW13 = 0;
     nc.u.GENERAL.CDW14 = 1; // Phase ID
 
     nvme_send_passthrough_command(
         p_nd,
-        NvmeOpcodeType::NoBuffer,
+        NvmeOpcodeType::NOBUFFER as u8 | direction,
         &nc,
         p_data_buf,
-        ncs,
         completion_dw0,
     )
 }
@@ -407,10 +401,12 @@ pub fn nvme_send_vsc_admin_passthrough_command(
     p_nd: &NvmeDisk,
     p_nc_admin: &NVME_COMMAND,
     p_data_buf: Option<&[u8]>,
-    p_ncs: Option<&mut NVME_COMMAND_STATUS>,
     p_completion_dw0: Option<&mut u32>,
-) -> io::Result<()> {
-    let mut opflag = (p_nc_admin.CDW0.OPC as i32) & 3;
+) -> io::Result<NVME_COMMAND_STATUS> {
+    let mut opflag = (p_nc_admin.CDW0.OPC as u8) & 3;
+    if p_data_buf.is_none() {
+        opflag = 0;
+    }
     let sub_opcode = match opflag {
         0 => VS_STD_NVME_CMD_TYPE_NON_DATA, // Adjust based on actual enum or constant
         1 => VS_STD_NVME_CMD_TYPE_WRITE,
@@ -427,17 +423,12 @@ pub fn nvme_send_vsc_admin_passthrough_command(
     };
     param_buffer[..command_bytes.len()].copy_from_slice(command_bytes);
 
-    if p_data_buf.is_none() {
-        opflag = 0;
-    }
-
     nvme_send_vsc2_passthrough_command(
         p_nd,
         sub_opcode,
         opflag,
         &param_buffer,
         p_data_buf.unwrap_or(&[]),
-        p_ncs,
         p_completion_dw0,
         0, // Default NSID, adjust if necessary
     )
@@ -452,12 +443,91 @@ fn set_vsc_op_code_by_project_type(project_type: String, sub_opcode: u32) -> u32
 // Example function, adjust based on actual implementation
 fn nvme_send_passthrough_command(
     _p_nd: &NvmeDisk,
-    _opcode_type: NvmeOpcodeType,
+    _opcode_type: u8,
     _nc: &NVME_COMMAND,
     _buffer: &[u8],
-    _p_ncs: &mut NVME_COMMAND_STATUS,
     _p_completion_dw0: &mut u32,
-) -> io::Result<()> {
+) -> io::Result<NVME_COMMAND_STATUS> {
     // Implement the actual logic for sending the passthrough command
-    Ok(())
+    Ok(NVME_COMMAND_STATUS::default())
+}
+
+pub fn print_nvme_identify_controller_data(data: &NVME_IDENTIFY_CONTROLLER_DATA) {
+    println!("{:<12} : 0x{:04X}", "vid", data.VID);
+    println!("{:<12} : 0x{:04X}", "ssvid", data.SSVID);
+    println!("{:<12} : {}", "sn", String::from_utf8_lossy(&data.SN));
+    println!("{:<12} : {}", "mn", String::from_utf8_lossy(&data.MN));
+    println!("{:<12} : {}", "fr", String::from_utf8_lossy(&data.FR));
+    println!("{:<12} : {}", "rab", data.RAB);
+    println!("{:<12} : {:?}", "ieee", &data.IEEE);
+    println!("{:<12} : {:?}", "cmic", data.CMIC);
+    println!("{:<12} : {}", "mdts", data.MDTS);
+    println!("{:<12} : {}", "cntlid", data.CNTLID);
+    println!("{:<12} : 0x{:08X}", "ver", data.VER);
+    println!("{:<12} : {}", "rtd3r", data.RTD3R);
+    println!("{:<12} : {}", "rtd3e", data.RTD3E);
+    println!("{:<12} : {:?}", "oaes", data.OAES);
+    println!("{:<12} : {:?}", "ctratt", data.CTRATT);
+    println!("{:<12} : {:?}", "rrls", data.RRLS);
+    println!("{:<12} : {}", "cntltype", data.CNTRLTYPE);
+    println!("{:<12} : {:?}", "fguid", &data.FGUID);
+    println!("{:<12} : {}", "crdt1", data.CRDT1);
+    println!("{:<12} : {}", "crdt2", data.CRDT2);
+    println!("{:<12} : {}", "crdt3", data.CRDT3);
+    println!("{:<12} : {:?}", "oacs", data.OACS);
+    println!("{:<12} : {}", "acl", data.ACL);
+    println!("{:<12} : {}", "aerl", data.AERL);
+    println!("{:<12} : {:?}", "frmw", data.FRMW);
+    println!("{:<12} : {:?}", "lpa", data.LPA);
+    println!("{:<12} : {}", "elpe", data.ELPE);
+    println!("{:<12} : {}", "npss", data.NPSS);
+    println!("{:<12} : {:?}", "avscp", data.AVSCC);
+    println!("{:<12} : {:?}", "apsta", data.APSTA);
+    println!("{:<12} : {}", "wctemp", data.WCTEMP);
+    println!("{:<12} : {}", "cctemp", data.CCTEMP);
+    println!("{:<12} : {}", "mtfa", data.MTFA);
+    println!("{:<12} : {}", "hmpre", data.HMPRE);
+    println!("{:<12} : {}", "hmmin", data.HMMIN);
+    println!("{:<12} : {:?}", "tnvmcap", &data.TNVMCAP);
+    println!("{:<12} : {:?}", "unvmcap", &data.UNVMCAP);
+    println!("{:<12} : {:?}", "rpmbs", data.RPMBS);
+    println!("{:<12} : {}", "edstt", data.EDSTT);
+    println!("{:<12} : {}", "dsto", data.DSTO);
+    println!("{:<12} : {}", "fwug", data.FWUG);
+    println!("{:<12} : {}", "kas", data.KAS);
+    println!("{:<12} : {:?}", "hctma", data.HCTMA);
+    println!("{:<12} : {}", "mntmt", data.MNTMT);
+    println!("{:<12} : {}", "mxtmt", data.MXTMT);
+    println!("{:<12} : {:?}", "sanicap", data.SANICAP);
+    println!("{:<12} : {}", "hmminds", data.HMMINDS);
+    println!("{:<12} : {}", "hmmaxd", data.HMMAXD);
+    println!("{:<12} : {}", "nsetidmax", data.NSETIDMAX);
+    println!("{:<12} : {}", "endgidmax", data.ENDGIDMAX);
+    println!("{:<12} : {}", "anatt", data.ANATT);
+    println!("{:<12} : {:?}", "anacap", data.ANACAP);
+    println!("{:<12} : {}", "anagrpmax", data.ANAGRPMAX);
+    println!("{:<12} : {}", "nanagrpid", data.NANAGRPID);
+    println!("{:<12} : {}", "pels", data.PELS);
+    println!("{:<12} : {:?}", "sqes", data.SQES);
+    println!("{:<12} : {:?}", "cqes", data.CQES);
+    println!("{:<12} : {}", "maxcmd", data.MAXCMD);
+    println!("{:<12} : {}", "nn", data.NN);
+    println!("{:<12} : {:?}", "oncs", data.ONCS);
+    println!("{:<12} : {:?}", "fuses", data.FUSES);
+    println!("{:<12} : {:?}", "fna", data.FNA);
+    println!("{:<12} : {:?}", "vwc", data.VWC);
+    println!("{:<12} : {}", "awun", data.AWUN);
+    println!("{:<12} : {}", "awupf", data.AWUPF);
+    println!("{:<12} : {:?}", "nvscss", data.NVSCC);
+    println!("{:<12} : {:?}", "nwpc", data.NWPC);
+    println!("{:<12} : {}", "acwu", data.ACWU);
+    println!("{:<12} : {:?}", "sgls", data.SGLS);
+    println!("{:<12} : {}", "mnan", data.MNAN);
+    println!(
+        "{:<12} : {}",
+        "subnqn",
+        String::from_utf8_lossy(&data.SUBNQN)
+    );
+    // Power State Descriptors are not printed here for brevity.
+    // Vendor Specific fields are also not printed here for brevity.
 }

@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use img_caster::dev::dev_utils::NvmeControllerList;
-use img_caster::dev::nvme_commands::nvme_identify_query;
+use img_caster::dev::nvme_commands::{nvme_identify_query, print_nvme_identify_controller_data};
 use img_caster::dev::nvme_device::NvmeDevice;
 
 #[derive(Parser, Default)]
@@ -63,7 +63,9 @@ fn main() {
     match controller {
         Some(controller) => {
             let device = NvmeDevice::open(&controller.path()).unwrap();
-            nvme_identify_query(&device).unwrap();
+            let info = nvme_identify_query(&device).unwrap();
+            print_nvme_identify_controller_data(&info);
+
             match &args.command {
                 Some(Commands::List {}) => {
                     println!("{}", controller);
