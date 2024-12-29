@@ -1,6 +1,9 @@
 use clap::{Parser, Subcommand};
 use img_caster::dev::dev_utils::NvmeControllerList;
 use img_caster::dev::nvme_commands::{nvme_identify_query, print_nvme_identify_controller_data};
+use img_caster::dev::nvme_define::{
+    NVME_ADMIN_COMMANDS, NVME_COMMAND, NVME_IDENTIFY_CONTROLLER_DATA,
+};
 use img_caster::dev::nvme_device::NvmeDevice;
 
 #[derive(Parser, Default)]

@@ -10,6 +10,61 @@ use std::{
 use windows_sys::Win32::System::Ioctl::*;
 use windows_sys::Win32::System::IO::DeviceIoControl;
 
+trait StorageProtocolSpecificData {
+    fn length(&mut self, length: usize) -> &mut Self;
+    fn set_protocol_data_offset(&mut self) -> &mut Self;
+    fn request_value(&mut self, value: u32) -> &mut Self;
+    fn data_type(&mut self, data_type: i32) -> &mut Self;
+    fn set_protocol_type(&mut self) -> &mut Self;
+    fn is_valid(&self, length: usize) -> bool;
+    fn default(&mut self) -> &mut Self;
+    fn data_ptr(&self) -> *const u8;
+}
+
+impl StorageProtocolSpecificData for STORAGE_PROTOCOL_SPECIFIC_DATA {
+    fn default(&mut self) -> &mut Self {
+        self.set_protocol_type();
+        self.set_protocol_data_offset();
+        self
+    }
+
+    fn set_protocol_type(&mut self) -> &mut Self {
+        self.ProtocolType = ProtocolTypeNvme as i32;
+        self
+    }
+
+    fn data_type(&mut self, data_type: i32) -> &mut Self {
+        self.DataType = data_type as u32;
+        self
+    }
+
+    fn request_value(&mut self, value: u32) -> &mut Self {
+        self.ProtocolDataRequestValue = value;
+        self
+    }
+
+    fn set_protocol_data_offset(&mut self) -> &mut Self {
+        self.ProtocolDataOffset = size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() as u32;
+        self
+    }
+
+    fn length(&mut self, length: usize) -> &mut Self {
+        self.ProtocolDataLength = length as u32;
+        self
+    }
+
+    fn is_valid(&self, length: usize) -> bool {
+        self.ProtocolDataOffset >= size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() as u32
+            && self.ProtocolDataLength >= length as u32
+    }
+
+    fn data_ptr(&self) -> *const u8 {
+        let protocol_data_ptr = self as *const _ as *const u8;
+        let offset_ptr = unsafe { protocol_data_ptr.add(self.ProtocolDataOffset as usize) };
+        offset_ptr
+    }
+}
+
 pub fn nvme_identify_query(device: &NvmeDevice) -> io::Result<NVME_IDENTIFY_CONTROLLER_DATA> {
     let data_offset = offset_of!(STORAGE_PROPERTY_QUERY, AdditionalParameters);
     let mut buffer: Vec<u8> =
@@ -25,12 +80,11 @@ pub fn nvme_identify_query(device: &NvmeDevice) -> io::Result<NVME_IDENTIFY_CONT
     query_command.PropertyId = StorageAdapterProtocolSpecificProperty;
     query_command.QueryType = PropertyStandardQuery;
 
-    protocol_data.ProtocolType = ProtocolTypeNvme as i32;
-    protocol_data.DataType = NVMeDataTypeIdentify as u32;
-    protocol_data.ProtocolDataRequestValue = NVME_IDENTIFY_CNS_CONTROLLER;
-    protocol_data.ProtocolDataRequestSubValue = 0;
-    protocol_data.ProtocolDataOffset = size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() as u32;
-    protocol_data.ProtocolDataLength = NVME_IDENTIFY_SIZE as u32;
+    protocol_data
+        .default()
+        .data_type(NVMeDataTypeIdentify)
+        .request_value(NVME_IDENTIFY_CNS_CONTROLLER)
+        .length(NVME_IDENTIFY_SIZE);
 
     let mut returned_length = 0;
     let result = unsafe {
@@ -63,20 +117,15 @@ pub fn nvme_identify_query(device: &NvmeDevice) -> io::Result<NVME_IDENTIFY_CONT
 
     let protocol_data = &protocol_data_descr.ProtocolSpecificData;
 
-    if protocol_data.ProtocolDataOffset < size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() as u32
-        || protocol_data.ProtocolDataLength < NVME_MAX_LOG_SIZE as u32
-    {
+    if !protocol_data.is_valid(NVME_MAX_LOG_SIZE) {
         return Err(io::Error::new(
             io::ErrorKind::Other,
             "ProtocolData Offset/Length not valid",
         ));
     }
 
-    let identify_controller_data = unsafe {
-        let protocol_data_ptr = protocol_data as *const _ as *const u8; // Get raw pointer to u8
-        let offset_ptr = protocol_data_ptr.add(protocol_data.ProtocolDataOffset as usize);
-        &*(offset_ptr as *const NVME_IDENTIFY_CONTROLLER_DATA)
-    };
+    let identify_controller_data =
+        unsafe { &*(protocol_data.data_ptr() as *const NVME_IDENTIFY_CONTROLLER_DATA) };
 
     if identify_controller_data.VID == 0 || identify_controller_data.NN == 0 {
         return Err(io::Error::new(
@@ -105,12 +154,11 @@ pub fn nvme_get_log_pages(device: &NvmeDevice) -> io::Result<()> {
     query.PropertyId = StorageDeviceProtocolSpecificProperty;
     query.QueryType = PropertyStandardQuery;
 
-    protocol_data.ProtocolType = ProtocolTypeNvme as i32;
-    protocol_data.DataType = NVMeDataTypeLogPage as u32;
-    protocol_data.ProtocolDataRequestValue = NVME_LOG_PAGE_HEALTH_INFO;
-    protocol_data.ProtocolDataRequestSubValue = 0;
-    protocol_data.ProtocolDataOffset = size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() as u32;
-    protocol_data.ProtocolDataLength = size_of::<NVME_HEALTH_INFO_LOG>() as u32;
+    protocol_data
+        .default()
+        .data_type(NVMeDataTypeLogPage)
+        .request_value(NVME_LOG_PAGE_HEALTH_INFO)
+        .length(size_of::<NVME_HEALTH_INFO_LOG>());
 
     let mut returned_length = 0;
     let result = unsafe {
@@ -141,20 +189,14 @@ pub fn nvme_get_log_pages(device: &NvmeDevice) -> io::Result<()> {
 
     let protocol_data = &protocol_data_descr.ProtocolSpecificData;
 
-    if protocol_data.ProtocolDataOffset < size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() as u32
-        || protocol_data.ProtocolDataLength < size_of::<NVME_HEALTH_INFO_LOG>() as u32
-    {
+    if !protocol_data.is_valid(size_of::<NVME_HEALTH_INFO_LOG>()) {
         return Err(io::Error::new(
             io::ErrorKind::Other,
             "ProtocolData Offset/Length not valid",
         ));
     }
 
-    let smart_info = unsafe {
-        let protocol_data_ptr = protocol_data as *const _ as *const u8; // Get raw pointer to u8
-        let offset_ptr = protocol_data_ptr.add(protocol_data.ProtocolDataOffset as usize);
-        &*(offset_ptr as *const NVME_HEALTH_INFO_LOG)
-    };
+    let smart_info = unsafe { &*(protocol_data.data_ptr() as *const NVME_HEALTH_INFO_LOG) };
 
     println!(
         "SMART/Health Information Log Data - Temperature: {}.",
@@ -306,150 +348,109 @@ impl Default for NvmeVscOpcode {
     }
 }
 
-#[derive(Debug, PartialEq)]
-pub enum NvmeStatusType {
-    GenericCommand,
-    // Add more variants as needed
-}
-
-#[derive(Debug, PartialEq)]
-pub enum NvmeStatus {
-    SuccessCompletion,
-    // Add more variants as needed
-}
-impl Default for NvmeStatusType {
-    fn default() -> Self {
-        NvmeStatusType::GenericCommand // Example
-    }
-}
-
-impl Default for NvmeStatus {
-    fn default() -> Self {
-        NvmeStatus::SuccessCompletion // Example
-    }
-}
-
-// Example Struct Definitions (actual fields may vary)
-#[derive(Debug, Default)]
-pub struct NvmeDisk {
-    pub project_type: String, // Example field, adjust as necessary
-                              // Add more fields as needed
-}
-
 const NVME_DATA_BUFFER_SIZE: usize = 4096; // Example size, adjust as necessary
 const VS_STD_NVME_CMD_TYPE_READ: u32 = 0;
 const VS_STD_NVME_CMD_TYPE_WRITE: u32 = 1;
 const VS_STD_NVME_CMD_TYPE_NON_DATA: u32 = 2;
 
-pub fn nvme_send_vsc2_passthrough_command(
-    p_nd: &NvmeDisk,
-    sub_opcode: u32, // Adjust type if necessary
-    direction: u8,
-    p_param_buf: &[u8],
-    p_data_buf: &[u8],
-    p_completion_dw0: Option<&mut u32>,
-    nsid: u32, // Adjust type if necessary
-) -> io::Result<NVME_COMMAND_STATUS> {
-    let mut default_completion_dw0 = 0;
-    let mut completion_dw0 = p_completion_dw0.unwrap_or(&mut default_completion_dw0);
+impl NvmeDevice {
+    pub fn nvme_send_vsc2_passthrough_command(
+        &self,
+        sub_opcode: u32, // Adjust type if necessary
+        direction: u8,
+        p_param_buf: &mut [u8],
+        p_data_buf: &mut [u8],
+        p_completion_dw0: Option<&mut u32>,
+        nsid: u32, // Adjust type if necessary
+    ) -> io::Result<NVME_COMMAND_STATUS> {
+        let mut default_completion_dw0 = 0;
+        let mut completion_dw0 = p_completion_dw0.unwrap_or(&mut default_completion_dw0);
 
-    let mut nc = NVME_COMMAND::default();
-    nc.CDW0.OPC = NvmeVscOpcode::Write as u8;
-    nc.u.GENERAL.CDW10 = p_param_buf.len() as u32 / size_of::<u32>() as u32;
-    nc.u.GENERAL.CDW11 = 0;
-    nc.u.GENERAL.CDW12 = set_vsc_op_code_by_project_type(p_nd.project_type.clone(), sub_opcode); // Adjust return type and function call if necessary
-    nc.u.GENERAL.CDW13 = 0;
-    nc.u.GENERAL.CDW14 = 0;
-    nc.NSID = nsid;
+        let mut nc = NVME_COMMAND::default();
+        nc.CDW0.set_OPC(NvmeVscOpcode::Write as u32);
+        nc.u.GENERAL.CDW10 = p_param_buf.len() as u32 / size_of::<u32>() as u32;
+        nc.u.GENERAL.CDW11 = 0;
+        nc.u.GENERAL.CDW12 =
+            self.set_vsc_op_code_by_project_type(self.project_type.clone(), sub_opcode); // Adjust return type and function call if necessary
+        nc.u.GENERAL.CDW13 = 0;
+        nc.u.GENERAL.CDW14 = 0;
+        nc.NSID = nsid;
 
-    let result = nvme_send_passthrough_command(
-        p_nd,
-        NvmeOpcodeType::WRITE as u8,
-        &nc,
-        p_param_buf,
-        completion_dw0,
-    );
-    let ncs = match result {
-        Ok(ncs) => ncs,
-        Err(e) => return Err(e),
-    };
-    if direction == 0
-        || ncs.SCT() != NVME_STATUS_TYPES::NVME_STATUS_TYPE_GENERIC_COMMAND as u16
-        || ncs.SC() != NVME_STATUS_GENERIC_COMMAND_CODES::NVME_STATUS_SUCCESS_COMPLETION as u16
-    {
-        return result;
-    }
+        let result = self.nvme_send_passthrough_command(
+            NvmeOpcodeType::WRITE as u8,
+            &nc,
+            p_param_buf,
+            completion_dw0,
+        );
+        let ncs = match result {
+            Ok(ncs) => ncs,
+            Err(e) => return Err(e),
+        };
+        if direction == 0
+            || ncs.SCT() != NVME_STATUS_TYPES::NVME_STATUS_TYPE_GENERIC_COMMAND as u16
+            || ncs.SC() != NVME_STATUS_GENERIC_COMMAND_CODES::NVME_STATUS_SUCCESS_COMPLETION as u16
+        {
+            return result;
+        }
 
-    // Data phase
-    nc.CDW0.OPC = NvmeVscOpcode::None as u8 | direction;
-    nc.u.GENERAL.CDW10 = p_data_buf.len() as u32 / size_of::<u32>() as u32;
-    nc.u.GENERAL.CDW11 = 0;
-    nc.u.GENERAL.CDW12 = set_vsc_op_code_by_project_type(p_nd.project_type.clone(), sub_opcode); // Adjust return type and function call if necessary
-    nc.u.GENERAL.CDW13 = 0;
-    nc.u.GENERAL.CDW14 = 1; // Phase ID
+        // Data phase
+        nc.CDW0
+            .set_OPC(NvmeVscOpcode::None as u32 | direction as u32);
+        nc.u.GENERAL.CDW10 = p_data_buf.len() as u32 / size_of::<u32>() as u32;
+        nc.u.GENERAL.CDW11 = 0;
+        nc.u.GENERAL.CDW12 =
+            self.set_vsc_op_code_by_project_type(self.project_type.clone(), sub_opcode); // Adjust return type and function call if necessary
+        nc.u.GENERAL.CDW13 = 0;
+        nc.u.GENERAL.CDW14 = 1; // Phase ID
 
-    nvme_send_passthrough_command(
-        p_nd,
-        NvmeOpcodeType::NOBUFFER as u8 | direction,
-        &nc,
-        p_data_buf,
-        completion_dw0,
-    )
-}
-
-pub fn nvme_send_vsc_admin_passthrough_command(
-    p_nd: &NvmeDisk,
-    p_nc_admin: &NVME_COMMAND,
-    p_data_buf: Option<&[u8]>,
-    p_completion_dw0: Option<&mut u32>,
-) -> io::Result<NVME_COMMAND_STATUS> {
-    let mut opflag = (p_nc_admin.CDW0.OPC as u8) & 3;
-    if p_data_buf.is_none() {
-        opflag = 0;
-    }
-    let sub_opcode = match opflag {
-        0 => VS_STD_NVME_CMD_TYPE_NON_DATA, // Adjust based on actual enum or constant
-        1 => VS_STD_NVME_CMD_TYPE_WRITE,
-        2 => VS_STD_NVME_CMD_TYPE_READ,
-        _ => return Err(io::Error::new(io::ErrorKind::Other, "Not Supported")),
-    };
-
-    let mut param_buffer = [0u8; NVME_DATA_BUFFER_SIZE];
-    let command_bytes = unsafe {
-        std::slice::from_raw_parts(
-            p_nc_admin as *const NVME_COMMAND as *const u8,
-            size_of::<NVME_COMMAND>(),
+        self.nvme_send_passthrough_command(
+            NvmeOpcodeType::NOBUFFER as u8 | direction,
+            &nc,
+            p_data_buf,
+            completion_dw0,
         )
-    };
-    param_buffer[..command_bytes.len()].copy_from_slice(command_bytes);
+    }
 
-    nvme_send_vsc2_passthrough_command(
-        p_nd,
-        sub_opcode,
-        opflag,
-        &param_buffer,
-        p_data_buf.unwrap_or(&[]),
-        p_completion_dw0,
-        0, // Default NSID, adjust if necessary
-    )
-}
+    pub fn nvme_send_vsc_admin_passthrough_command(
+        &self,
+        p_nc_admin: &NVME_COMMAND,
+        p_data_buf: Option<&mut [u8]>,
+        p_completion_dw0: Option<&mut u32>,
+    ) -> io::Result<NVME_COMMAND_STATUS> {
+        let mut opflag = (p_nc_admin.CDW0.OPC() as u8) & 3;
+        if p_data_buf.is_none() {
+            opflag = 0;
+        }
+        let sub_opcode = match opflag {
+            0 => VS_STD_NVME_CMD_TYPE_NON_DATA, // Adjust based on actual enum or constant
+            1 => VS_STD_NVME_CMD_TYPE_WRITE,
+            2 => VS_STD_NVME_CMD_TYPE_READ,
+            _ => return Err(io::Error::new(io::ErrorKind::Other, "Not Supported")),
+        };
 
-// Example function, adjust based on actual implementation
-fn set_vsc_op_code_by_project_type(project_type: String, sub_opcode: u32) -> u32 {
-    // Implement logic to determine sub-opcode based on project type
-    sub_opcode
-}
+        let mut param_buffer = [0u8; NVME_DATA_BUFFER_SIZE];
+        let command_bytes = unsafe {
+            std::slice::from_raw_parts(
+                p_nc_admin as *const NVME_COMMAND as *const u8,
+                size_of::<NVME_COMMAND>(),
+            )
+        };
+        param_buffer[..command_bytes.len()].copy_from_slice(command_bytes);
 
-// Example function, adjust based on actual implementation
-fn nvme_send_passthrough_command(
-    _p_nd: &NvmeDisk,
-    _opcode_type: u8,
-    _nc: &NVME_COMMAND,
-    _buffer: &[u8],
-    _p_completion_dw0: &mut u32,
-) -> io::Result<NVME_COMMAND_STATUS> {
-    // Implement the actual logic for sending the passthrough command
-    Ok(NVME_COMMAND_STATUS::default())
+        self.nvme_send_vsc2_passthrough_command(
+            sub_opcode,
+            opflag,
+            &mut param_buffer,
+            p_data_buf.unwrap_or(&mut []),
+            p_completion_dw0,
+            0, // Default NSID, adjust if necessary
+        )
+    }
+
+    fn set_vsc_op_code_by_project_type(&self, project_type: String, sub_opcode: u32) -> u32 {
+        // Implement logic to determine sub-opcode based on project type
+        sub_opcode
+    }
 }
 
 pub fn print_nvme_identify_controller_data(data: &NVME_IDENTIFY_CONTROLLER_DATA) {

@@ -10,6 +10,7 @@ use windows_sys::Win32::System::IO::DeviceIoControl;
 // let offset = field_offset::<SomeType, SomeFieldType>(0 as *const SomeType, |s| &s.some_field);
 pub struct NvmeDevice {
     handle: HANDLE,
+    pub project_type: String, // Example field, adjust as necessary
 }
 
 impl NvmeDevice {
@@ -18,7 +19,10 @@ impl NvmeDevice {
         if handle == INVALID_HANDLE_VALUE {
             Err(io::Error::last_os_error())
         } else {
-            Ok(Self { handle })
+            Ok(Self {
+                handle,
+                project_type: String::new(),
+            })
         }
     }
 
@@ -28,8 +32,10 @@ impl NvmeDevice {
 
     pub fn nvme_send_passthrough_command(
         &self,
+        direction: u8,
         nvme_command: &NVME_COMMAND,
         data_buffer: &mut [u8],
+        return_dw0: &mut u32,
     ) -> io::Result<NVME_COMMAND_STATUS> {
         let command_offset = offset_of!(STORAGE_PROTOCOL_COMMAND, Command);
         let mut buffer: Vec<u8> =
@@ -47,7 +53,6 @@ impl NvmeDevice {
         protocol_command.ErrorInfoOffset =
             command_offset as u32 + STORAGE_PROTOCOL_COMMAND_LENGTH_NVME;
 
-        let direction = nvme_command.CDW0.OPC & 3;
         match direction {
             1 => {
                 protocol_command.DataToDeviceTransferLength = data_buffer.len() as u32;
@@ -91,6 +96,7 @@ impl NvmeDevice {
         };
 
         if result == 0 {
+            println!("Error: {:?}", io::Error::last_os_error());
             Err(io::Error::last_os_error())
         } else {
             if direction == 2 && data_buffer.len() > 0 {

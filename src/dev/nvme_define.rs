@@ -3935,14 +3935,18 @@ struct NVME_CDW15_ZONE_APPEND {
     LBATM: u32, // Logical Block Application Tag Mask (LBATM)
 }
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
+#[bitfield(u32)]
 pub struct NVME_COMMAND_DWORD0 {
-    pub OPC: u8,  // Opcode (OPC)
-    pub FUSE: u8, // Fused Operation (FUSE)
-    pub Reserved0: u8,
-    pub PSDT: u8, // PRP or SGL for Data Transfer (PSDT)
-    pub CID: u16, // Command Identifier (CID)
+    #[bits(8)]
+    pub OPC: u32,  // Opcode (OPC)
+    #[bits(2)]
+    pub FUSE: u32, // Fused Operation (FUSE)
+    #[bits(5)]
+    pub Reserved0: u32,
+    #[bits(1)]
+    pub PSDT: u32, // PRP or SGL for Data Transfer (PSDT)
+    #[bits(16)]
+    pub CID: u32, // Command Identifier (CID)
 }
 
 #[repr(C)]
