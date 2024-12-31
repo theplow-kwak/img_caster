@@ -1,359 +1,71 @@
 use crate::dev::nvme_define::*;
 use crate::dev::nvme_device::*;
 use std::mem::offset_of;
-use std::{
-    ffi::c_void,
-    io,
-    mem::{size_of, transmute},
-    ptr::null_mut,
-};
+use std::{ffi::c_void, io, mem::size_of, ptr::null_mut};
 use windows_sys::Win32::System::Ioctl::*;
 use windows_sys::Win32::System::IO::DeviceIoControl;
 
-trait StorageProtocolSpecificData {
-    fn length(&mut self, length: usize) -> &mut Self;
-    fn set_protocol_data_offset(&mut self) -> &mut Self;
-    fn request_value(&mut self, value: u32) -> &mut Self;
-    fn data_type(&mut self, data_type: i32) -> &mut Self;
-    fn set_protocol_type(&mut self) -> &mut Self;
-    fn is_valid(&self, length: usize) -> bool;
-    fn default(&mut self) -> &mut Self;
-    fn data_ptr(&self) -> *const u8;
-}
-
-impl StorageProtocolSpecificData for STORAGE_PROTOCOL_SPECIFIC_DATA {
-    fn default(&mut self) -> &mut Self {
-        self.set_protocol_type();
-        self.set_protocol_data_offset();
+impl NVME_COMMAND {
+    pub fn opcode(&mut self, opc: u32) -> &mut Self {
+        self.CDW0.set_OPC(opc);
         self
     }
-
-    fn set_protocol_type(&mut self) -> &mut Self {
-        self.ProtocolType = ProtocolTypeNvme as i32;
+    pub fn nsid(&mut self, nsid: u32) -> &mut Self {
+        self.NSID = nsid;
         self
     }
-
-    fn data_type(&mut self, data_type: i32) -> &mut Self {
-        self.DataType = data_type as u32;
+    pub fn data(&mut self) -> &mut Self {
         self
     }
-
-    fn request_value(&mut self, value: u32) -> &mut Self {
-        self.ProtocolDataRequestValue = value;
+    pub fn cdw10(&mut self, value: u32) -> &mut Self {
+        self.u.GENERAL.CDW10 = value;
         self
     }
-
-    fn set_protocol_data_offset(&mut self) -> &mut Self {
-        self.ProtocolDataOffset = size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() as u32;
+    pub fn cdw11(&mut self, value: u32) -> &mut Self {
+        self.u.GENERAL.CDW11 = value;
         self
     }
-
-    fn length(&mut self, length: usize) -> &mut Self {
-        self.ProtocolDataLength = length as u32;
+    pub fn cdw12(&mut self, value: u32) -> &mut Self {
+        self.u.GENERAL.CDW12 = value;
         self
     }
-
-    fn is_valid(&self, length: usize) -> bool {
-        self.ProtocolDataOffset >= size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() as u32
-            && self.ProtocolDataLength >= length as u32
+    pub fn cdw13(&mut self, value: u32) -> &mut Self {
+        self.u.GENERAL.CDW13 = value;
+        self
     }
-
-    fn data_ptr(&self) -> *const u8 {
-        let protocol_data_ptr = self as *const _ as *const u8;
-        let offset_ptr = unsafe { protocol_data_ptr.add(self.ProtocolDataOffset as usize) };
-        offset_ptr
+    pub fn cdw14(&mut self, value: u32) -> &mut Self {
+        self.u.GENERAL.CDW14 = value;
+        self
     }
-}
-
-pub fn nvme_identify_query(device: &NvmeDevice) -> io::Result<NVME_IDENTIFY_CONTROLLER_DATA> {
-    let data_offset = offset_of!(STORAGE_PROPERTY_QUERY, AdditionalParameters);
-    let mut buffer: Vec<u8> =
-        vec![0; data_offset + size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() + NVME_MAX_LOG_SIZE];
-    let buffer_length = buffer.len() as u32;
-
-    let query_command = unsafe { &mut *(buffer.as_mut_ptr() as *mut STORAGE_PROPERTY_QUERY) };
-    let protocol_data = unsafe {
-        &mut *(query_command.AdditionalParameters.as_mut_ptr()
-            as *mut STORAGE_PROTOCOL_SPECIFIC_DATA)
-    };
-
-    query_command.PropertyId = StorageAdapterProtocolSpecificProperty;
-    query_command.QueryType = PropertyStandardQuery;
-
-    protocol_data
-        .default()
-        .data_type(NVMeDataTypeIdentify)
-        .request_value(NVME_IDENTIFY_CNS_CONTROLLER)
-        .length(NVME_IDENTIFY_SIZE);
-
-    let mut returned_length = 0;
-    let result = unsafe {
-        DeviceIoControl(
-            device.get_handle(),
-            IOCTL_STORAGE_QUERY_PROPERTY as u32,
-            buffer.as_mut_ptr() as *mut c_void,
-            buffer_length,
-            buffer.as_mut_ptr() as *mut c_void,
-            buffer_length,
-            &mut returned_length,
-            null_mut(),
-        )
-    };
-
-    if result == 0 {
-        return Err(io::Error::last_os_error());
+    pub fn cdw15(&mut self, value: u32) -> &mut Self {
+        self.u.GENERAL.CDW15 = value;
+        self
     }
-
-    let protocol_data_descr =
-        unsafe { &mut *(buffer.as_mut_ptr() as *mut STORAGE_PROTOCOL_DATA_DESCRIPTOR) };
-    if protocol_data_descr.Version != size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32
-        || protocol_data_descr.Size != size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "Data descriptor header not valid",
-        ));
+    pub fn identify(&mut self, cns: u8) -> &mut Self {
+        unsafe { self.u.IDENTIFY.CDW10.set_CNS(cns) };
+        self
     }
-
-    let protocol_data = &protocol_data_descr.ProtocolSpecificData;
-
-    if !protocol_data.is_valid(NVME_MAX_LOG_SIZE) {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "ProtocolData Offset/Length not valid",
-        ));
+    pub fn abort(&mut self) -> &mut Self {
+        self
     }
-
-    let identify_controller_data =
-        unsafe { &*(protocol_data.data_ptr() as *const NVME_IDENTIFY_CONTROLLER_DATA) };
-
-    if identify_controller_data.VID == 0 || identify_controller_data.NN == 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "Identify Controller Data not valid",
-        ));
+    pub fn getfeatures(&mut self) -> &mut Self {
+        self
     }
-
-    println!("***Identify Controller Data succeeded***");
-    Ok(*identify_controller_data)
-}
-
-pub fn nvme_get_log_pages(device: &NvmeDevice) -> io::Result<()> {
-    let command_offset = offset_of!(STORAGE_PROPERTY_QUERY, AdditionalParameters);
-    let mut buffer: Vec<u8> =
-        vec![0; command_offset + size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() + NVME_MAX_LOG_SIZE];
-    let buffer_length = buffer.len() as u32;
-
-    let query = unsafe { &mut *(buffer.as_mut_ptr() as *mut STORAGE_PROPERTY_QUERY) };
-    let protocol_data_descr =
-        unsafe { &mut *(buffer.as_mut_ptr() as *mut STORAGE_PROTOCOL_DATA_DESCRIPTOR) };
-    let protocol_data = unsafe {
-        &mut *(query.AdditionalParameters.as_mut_ptr() as *mut STORAGE_PROTOCOL_SPECIFIC_DATA)
-    };
-
-    query.PropertyId = StorageDeviceProtocolSpecificProperty;
-    query.QueryType = PropertyStandardQuery;
-
-    protocol_data
-        .default()
-        .data_type(NVMeDataTypeLogPage)
-        .request_value(NVME_LOG_PAGE_HEALTH_INFO)
-        .length(size_of::<NVME_HEALTH_INFO_LOG>());
-
-    let mut returned_length = 0;
-    let result = unsafe {
-        DeviceIoControl(
-            device.get_handle(),
-            IOCTL_STORAGE_QUERY_PROPERTY,
-            buffer.as_mut_ptr() as *mut c_void,
-            buffer_length,
-            buffer.as_mut_ptr() as *mut c_void,
-            buffer_length,
-            &mut returned_length,
-            null_mut(),
-        )
-    };
-
-    if result == 0 {
-        return Err(io::Error::last_os_error());
+    pub fn setfeatures(&mut self) -> &mut Self {
+        self
     }
-
-    if protocol_data_descr.Version != size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32
-        || protocol_data_descr.Size != size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "Data descriptor header not valid",
-        ));
+    pub fn getlogpage(&mut self) -> &mut Self {
+        self
     }
-
-    let protocol_data = &protocol_data_descr.ProtocolSpecificData;
-
-    if !protocol_data.is_valid(size_of::<NVME_HEALTH_INFO_LOG>()) {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "ProtocolData Offset/Length not valid",
-        ));
+    pub fn formatnvm(&mut self) -> &mut Self {
+        self
     }
-
-    let smart_info = unsafe { &*(protocol_data.data_ptr() as *const NVME_HEALTH_INFO_LOG) };
-
-    println!(
-        "SMART/Health Information Log Data - Temperature: {}.",
-        (smart_info.Temperature as u32) - 273
-    );
-    println!("***SMART/Health Information Log succeeded***");
-    Ok(())
-}
-
-pub fn nvme_get_feature(device: &NvmeDevice) -> io::Result<()> {
-    const BUFFER_LENGTH: usize = size_of::<STORAGE_PROPERTY_QUERY>() - size_of::<[u8; 1]>()
-        + size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>()
-        + NVME_MAX_LOG_SIZE;
-    let mut buffer: Vec<u8> = vec![0; BUFFER_LENGTH];
-
-    let query = unsafe { &mut *(buffer.as_mut_ptr() as *mut STORAGE_PROPERTY_QUERY) };
-    let protocol_data = unsafe {
-        &mut *(query.AdditionalParameters.as_mut_ptr() as *mut STORAGE_PROTOCOL_SPECIFIC_DATA)
-    };
-
-    query.PropertyId = StorageDeviceProtocolSpecificProperty;
-    query.QueryType = PropertyStandardQuery;
-
-    protocol_data.ProtocolType = ProtocolTypeNvme as i32;
-    protocol_data.DataType = NVMeDataTypeFeature as u32;
-    protocol_data.ProtocolDataRequestValue = NVME_FEATURE_VOLATILE_WRITE_CACHE;
-    protocol_data.ProtocolDataRequestSubValue = 0;
-    protocol_data.ProtocolDataOffset = size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() as u32;
-    protocol_data.ProtocolDataLength = NVME_MAX_LOG_SIZE as u32;
-
-    let mut returned_length = 0;
-    let result = unsafe {
-        DeviceIoControl(
-            device.get_handle(),
-            IOCTL_STORAGE_QUERY_PROPERTY,
-            buffer.as_mut_ptr() as *mut c_void,
-            BUFFER_LENGTH as u32,
-            buffer.as_mut_ptr() as *mut c_void,
-            BUFFER_LENGTH as u32,
-            &mut returned_length,
-            null_mut(),
-        )
-    };
-
-    if result == 0 {
-        return Err(io::Error::last_os_error());
-    }
-
-    let protocol_data_descr =
-        unsafe { &mut *(buffer.as_mut_ptr() as *mut STORAGE_PROTOCOL_DATA_DESCRIPTOR) };
-
-    if protocol_data_descr.Version != size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32
-        || protocol_data_descr.Size != size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "Data descriptor header not valid",
-        ));
-    }
-
-    let protocol_data = &protocol_data_descr.ProtocolSpecificData;
-
-    if protocol_data.ProtocolDataOffset < size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() as u32
-        || protocol_data.ProtocolDataLength < NVME_MAX_LOG_SIZE as u32
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "ProtocolData Offset/Length not valid",
-        ));
-    }
-
-    println!(
-        "Volatile Cache: {:x}",
-        protocol_data.FixedProtocolReturnData
-    );
-
-    println!("***Get Feature - Volatile Cache succeeded***");
-    Ok(())
-}
-
-pub fn nvme_set_features(device: &NvmeDevice) -> io::Result<()> {
-    let buffer_length = size_of::<STORAGE_PROPERTY_SET>() - size_of::<[u8; 1]>()
-        + size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA_EXT>()
-        + NVME_MAX_LOG_SIZE;
-    let mut buffer: Vec<u8> = vec![0; buffer_length as usize];
-
-    let set_property = unsafe { &mut *(buffer.as_mut_ptr() as *mut STORAGE_PROPERTY_SET) };
-    let protocol_data = unsafe {
-        &mut *(set_property.AdditionalParameters.as_mut_ptr()
-            as *mut STORAGE_PROTOCOL_SPECIFIC_DATA_EXT)
-    };
-
-    set_property.PropertyId = StorageAdapterProtocolSpecificProperty;
-    set_property.SetType = PropertyStandardSet;
-
-    protocol_data.ProtocolType = ProtocolTypeNvme as i32;
-    protocol_data.DataType = NVMeDataTypeFeature as u32;
-    protocol_data.ProtocolDataValue = NVME_FEATURE_HOST_CONTROLLED_THERMAL_MANAGEMENT;
-    protocol_data.ProtocolDataSubValue = 0;
-    protocol_data.ProtocolDataSubValue2 = 0;
-    protocol_data.ProtocolDataSubValue3 = 0;
-    protocol_data.ProtocolDataSubValue4 = 0;
-    protocol_data.ProtocolDataSubValue5 = 0;
-    protocol_data.ProtocolDataOffset = 0;
-    protocol_data.ProtocolDataLength = 0;
-
-    let mut returned_length = 0;
-    let result = unsafe {
-        DeviceIoControl(
-            device.get_handle(),
-            IOCTL_STORAGE_SET_PROPERTY,
-            buffer.as_mut_ptr() as *mut c_void,
-            buffer_length as u32,
-            buffer.as_mut_ptr() as *mut c_void,
-            buffer_length as u32,
-            &mut returned_length,
-            null_mut(),
-        )
-    };
-
-    if result == 0 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(())
+    pub fn sanitize(&mut self) -> &mut Self {
+        self
     }
 }
 
-// Example Enum Definitions (actual values and types may vary)
-#[repr(u8)]
-#[derive(Debug)]
-pub enum NvmeOpcodeType {
-    NOBUFFER,
-    WRITE,
-    READ,
-    READWRITE,
-}
-
-#[repr(u8)]
-#[derive(Debug, Copy, Clone)]
-pub enum NvmeVscOpcode {
-    None = 0x00,
-    Write = 0x01,
-    Read = 0x02,
-}
-
-impl Default for NvmeVscOpcode {
-    fn default() -> Self {
-        NvmeVscOpcode::None
-    }
-}
-
-const NVME_DATA_BUFFER_SIZE: usize = 4096; // Example size, adjust as necessary
-const VS_STD_NVME_CMD_TYPE_READ: u32 = 0;
-const VS_STD_NVME_CMD_TYPE_WRITE: u32 = 1;
-const VS_STD_NVME_CMD_TYPE_NON_DATA: u32 = 2;
-
-impl NvmeDevice {
+impl InboxDriver {
     pub fn nvme_send_vsc2_passthrough_command(
         &self,
         sub_opcode: u32, // Adjust type if necessary
@@ -367,14 +79,10 @@ impl NvmeDevice {
         let mut completion_dw0 = p_completion_dw0.unwrap_or(&mut default_completion_dw0);
 
         let mut nc = NVME_COMMAND::default();
-        nc.CDW0.set_OPC(NvmeVscOpcode::Write as u32);
-        nc.u.GENERAL.CDW10 = p_param_buf.len() as u32 / size_of::<u32>() as u32;
-        nc.u.GENERAL.CDW11 = 0;
-        nc.u.GENERAL.CDW12 =
-            self.set_vsc_op_code_by_project_type(self.project_type.clone(), sub_opcode); // Adjust return type and function call if necessary
-        nc.u.GENERAL.CDW13 = 0;
-        nc.u.GENERAL.CDW14 = 0;
-        nc.NSID = nsid;
+        nc.opcode(NvmeVscOpcode::Write as u32)
+            .nsid(nsid)
+            .cdw10(p_param_buf.len() as u32 / size_of::<u32>() as u32)
+            .cdw12(sub_opcode);
 
         let result = self.nvme_send_passthrough_command(
             NvmeOpcodeType::WRITE as u8,
@@ -394,14 +102,10 @@ impl NvmeDevice {
         }
 
         // Data phase
-        nc.CDW0
-            .set_OPC(NvmeVscOpcode::None as u32 | direction as u32);
-        nc.u.GENERAL.CDW10 = p_data_buf.len() as u32 / size_of::<u32>() as u32;
-        nc.u.GENERAL.CDW11 = 0;
-        nc.u.GENERAL.CDW12 =
-            self.set_vsc_op_code_by_project_type(self.project_type.clone(), sub_opcode); // Adjust return type and function call if necessary
-        nc.u.GENERAL.CDW13 = 0;
-        nc.u.GENERAL.CDW14 = 1; // Phase ID
+        nc.opcode(NvmeVscOpcode::None as u32 | direction as u32)
+            .cdw10(p_data_buf.len() as u32 / size_of::<u32>() as u32)
+            .cdw12(sub_opcode)
+            .cdw14(1);
 
         self.nvme_send_passthrough_command(
             NvmeOpcodeType::NOBUFFER as u8 | direction,
@@ -417,11 +121,11 @@ impl NvmeDevice {
         p_data_buf: Option<&mut [u8]>,
         p_completion_dw0: Option<&mut u32>,
     ) -> io::Result<NVME_COMMAND_STATUS> {
-        let mut opflag = (p_nc_admin.CDW0.OPC() as u8) & 3;
+        let mut direction = (p_nc_admin.CDW0.OPC() as u8) & 3;
         if p_data_buf.is_none() {
-            opflag = 0;
+            direction = 0;
         }
-        let sub_opcode = match opflag {
+        let sub_opcode = match direction {
             0 => VS_STD_NVME_CMD_TYPE_NON_DATA, // Adjust based on actual enum or constant
             1 => VS_STD_NVME_CMD_TYPE_WRITE,
             2 => VS_STD_NVME_CMD_TYPE_READ,
@@ -439,7 +143,7 @@ impl NvmeDevice {
 
         self.nvme_send_vsc2_passthrough_command(
             sub_opcode,
-            opflag,
+            direction,
             &mut param_buffer,
             p_data_buf.unwrap_or(&mut []),
             p_completion_dw0,
@@ -447,11 +151,55 @@ impl NvmeDevice {
         )
     }
 
-    fn set_vsc_op_code_by_project_type(&self, project_type: String, sub_opcode: u32) -> u32 {
-        // Implement logic to determine sub-opcode based on project type
-        sub_opcode
+    pub fn nvme_identify_ns_list(&self, nsid: u32) -> io::Result<NVME_COMMAND_STATUS> {
+        let mut buffer = vec![0u8; 4096];
+        let mut nc = NVME_COMMAND::default();
+        let mut dw0: u32 = 0;
+        nc.opcode(NVME_ADMIN_COMMANDS::NVME_ADMIN_COMMAND_IDENTIFY as u32)
+            .nsid(nsid)
+            .identify(NVME_IDENTIFY_CNS_CODES::NVME_IDENTIFY_CNS_ACTIVE_NAMESPACES as u8);
+        let ncs =
+            self.nvme_send_vsc_admin_passthrough_command(&nc, Some(&mut buffer), Some(&mut dw0));
+        let mut ns_list = Vec::with_capacity(buffer.len() / 4);
+        for chunk in buffer.chunks_exact(4) {
+            let value = u32::from_le_bytes(chunk.try_into().expect("Chunk size mismatch"));
+            if value != 0 {
+                ns_list.push(value);
+                println!("{:?}", value);
+            }
+        }
+        ncs
     }
 }
+
+// Example Enum Definitions (actual values and types may vary)
+#[repr(u8)]
+#[derive(Debug)]
+pub enum NvmeOpcodeType {
+    NOBUFFER,
+    WRITE,
+    READ,
+    READWRITE,
+}
+
+#[repr(u8)]
+#[derive(Debug, Copy, Clone)]
+pub enum NvmeVscOpcode {
+    None = 0xf0,
+    Write = 0xf1,
+    Read = 0xf2,
+}
+
+impl Default for NvmeVscOpcode {
+    fn default() -> Self {
+        NvmeVscOpcode::None
+    }
+}
+
+const NVME_DATA_BUFFER_SIZE: usize = 4096; // Example size, adjust as necessary
+const VS_STD_NVME_CMD_TYPE_READ: u32 = 0x83061400;
+const VS_STD_NVME_CMD_TYPE_WRITE: u32 = 0x83061401;
+const VS_STD_NVME_CMD_TYPE_NON_DATA: u32 = 0x83061402;
 
 pub fn print_nvme_identify_controller_data(data: &NVME_IDENTIFY_CONTROLLER_DATA) {
     println!("{:<12} : 0x{:04X}", "vid", data.VID);

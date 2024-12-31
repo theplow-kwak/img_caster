@@ -1,10 +1,7 @@
 use clap::{Parser, Subcommand};
 use img_caster::dev::dev_utils::NvmeControllerList;
-use img_caster::dev::nvme_commands::{nvme_identify_query, print_nvme_identify_controller_data};
-use img_caster::dev::nvme_define::{
-    NVME_ADMIN_COMMANDS, NVME_COMMAND, NVME_IDENTIFY_CONTROLLER_DATA,
-};
-use img_caster::dev::nvme_device::NvmeDevice;
+use img_caster::dev::nvme_commands::print_nvme_identify_controller_data;
+use img_caster::dev::nvme_device::InboxDriver;
 
 #[derive(Parser, Default)]
 #[command(author, version, about)]
@@ -12,15 +9,12 @@ use img_caster::dev::nvme_device::NvmeDevice;
 struct Args {
     #[command(subcommand)]
     command: Option<Commands>,
-
     /// PhysicalDrive number. ex) 1 -> "\\.\PhysicalDrive1"
     #[arg(short, long)]
     disk: Option<i32>,
-
     /// pci bus number. ex) 3 -> "3:0.0"
     #[arg(short, long)]
     bus: Option<i32>,
-
     /// Namespace ID
     #[arg(short, long)]
     nsid: Option<i32>,
@@ -65,9 +59,9 @@ fn main() {
 
     match controller {
         Some(controller) => {
-            let device = NvmeDevice::open(&controller.path()).unwrap();
-            let info = nvme_identify_query(&device).unwrap();
-            print_nvme_identify_controller_data(&info);
+            let device = InboxDriver::open(&controller.path()).unwrap();
+            let info = device.nvme_identify_ns_list(0).unwrap();
+            // print_nvme_identify_controller_data(&info);
 
             match &args.command {
                 Some(Commands::List {}) => {
