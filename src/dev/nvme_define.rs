@@ -3793,7 +3793,6 @@ enum ZONE_STATE {
     NVME_STATE_ZSO = 0xF,  // Zone State Offline
 }
 
-
 #[derive(Debug, Clone, Copy)]
 pub enum NVME_ZONE_SEND_ACTION {
     NVME_ZONE_SEND_CLOSE = 1,                  // Close one or more zones
