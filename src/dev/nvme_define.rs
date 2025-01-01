@@ -5,9 +5,6 @@
 use bitfield_struct::bitfield;
 
 pub const NVME_IDENTIFY_SIZE: usize = 4096;
-pub const NVME_FEATURE_HOST_CONTROLLED_THERMAL_MANAGEMENT: u32 = 0x10;
-pub const NVME_FEATURE_TEMPERATURE_THRESHOLD: u32 = 0x11;
-pub const NVME_FEATURE_VOLATILE_WRITE_CACHE: u32 = 0x0C;
 
 //
 // 3.1.1  Offset 00h: CAP (Controller Capabilities)

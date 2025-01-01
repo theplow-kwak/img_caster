@@ -62,7 +62,7 @@ fn main() {
             let device = InboxDriver::open(&controller.path()).unwrap();
             let info = device.nvme_identify_controller().unwrap();
             print_nvme_identify_controller_data(&info);
-            let info = device.nvme_get_log_pages().unwrap();
+            let info = device.nvme_get_log_pages(7).unwrap();
             println!("{:?}", info);
             let info = device.nvme_identify_ns_list(0).unwrap();
 

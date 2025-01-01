@@ -76,7 +76,7 @@ impl InboxDriver {
         nsid: u32, // Adjust type if necessary
     ) -> io::Result<NVME_COMMAND_STATUS> {
         let mut default_completion_dw0 = 0;
-        let mut completion_dw0 = p_completion_dw0.unwrap_or(&mut default_completion_dw0);
+        let completion_dw0 = p_completion_dw0.unwrap_or(&mut default_completion_dw0);
 
         let mut nc = NVME_COMMAND::default();
         nc.opcode(NvmeVscOpcode::Write as u32)

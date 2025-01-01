@@ -1,5 +1,5 @@
 use crate::dev::disk::open;
-use crate::dev::nvme_define::{NVME_IDENTIFY_CNS_CODES::*, NVME_LOG_PAGES::*, *};
+use crate::dev::nvme_define::{NVME_FEATURES::*, NVME_IDENTIFY_CNS_CODES::*, NVME_LOG_PAGES::*, *};
 use std::mem::offset_of;
 use std::{ffi::c_void, io, mem::size_of, ptr::null_mut};
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
@@ -71,7 +71,7 @@ impl StorageProtocolCommand for STORAGE_PROTOCOL_COMMAND {
 
 trait StorageProtocolSpecificData {
     fn new(data_type: i32, request_value: u32, length: usize) -> Self;
-    fn set(&mut self, data_type: i32, value: u32, length: usize) -> &mut Self;
+    fn set(&mut self, data_type: i32, request_value: u32, length: usize) -> &mut Self;
     fn is_valid(&self, length: usize) -> bool;
     fn get_data(&self) -> &[u8];
 }
@@ -241,14 +241,13 @@ impl InboxDriver {
             NVME_IDENTIFY_SIZE,
         );
 
-        if let Ok(identify_controller_data_bytes) = self.nvme_send_query_command(
+        if let Ok(data_bytes) = self.nvme_send_query_command(
             StorageAdapterProtocolSpecificProperty,
             &protocol_specific_data,
             NVME_IDENTIFY_SIZE,
         ) {
-            let identify_controller_data = unsafe {
-                *(identify_controller_data_bytes.as_ptr() as *const NVME_IDENTIFY_CONTROLLER_DATA)
-            };
+            let identify_controller_data =
+                unsafe { *(data_bytes.as_ptr() as *const NVME_IDENTIFY_CONTROLLER_DATA) };
             if identify_controller_data.VID == 0 || identify_controller_data.NN == 0 {
                 return Err(io::Error::new(
                     io::ErrorKind::Other,
@@ -280,25 +279,37 @@ impl InboxDriver {
         }
     }
 
-    pub fn nvme_get_log_pages(&self) -> io::Result<NVME_HEALTH_INFO_LOG> {
-        let protocol_specific_data = STORAGE_PROTOCOL_SPECIFIC_DATA::new(
-            NVMeDataTypeLogPage,
-            NVME_LOG_PAGE_HEALTH_INFO as u32,
-            size_of::<NVME_HEALTH_INFO_LOG>(),
-        );
+    pub fn nvme_get_log_pages(&self, log_id: u32) -> io::Result<&[u8]> {
+        let protocol_specific_data =
+            STORAGE_PROTOCOL_SPECIFIC_DATA::new(NVMeDataTypeLogPage, log_id, NVME_MAX_LOG_SIZE);
         if let Ok(data_bytes) = self.nvme_send_query_command(
-            StorageDeviceProtocolSpecificProperty,
+            StorageAdapterProtocolSpecificProperty,
             &protocol_specific_data,
-            size_of::<NVME_HEALTH_INFO_LOG>(),
+            NVME_MAX_LOG_SIZE,
         ) {
-            let data = unsafe { *(data_bytes.as_ptr() as *const NVME_HEALTH_INFO_LOG) };
-            Ok(data)
+            // let data = unsafe { *(data_bytes.as_ptr() as *const NVME_HEALTH_INFO_LOG) };
+            Ok(data_bytes)
         } else {
             Err(io::Error::last_os_error())
         }
     }
 
-    pub fn nvme_get_feature(&self) -> io::Result<()> {
+    pub fn nvme_get_feature(&self, fid: u32) -> io::Result<&[u8]> {
+        let protocol_specific_data =
+            STORAGE_PROTOCOL_SPECIFIC_DATA::new(NVMeDataTypeFeature, fid, NVME_MAX_LOG_SIZE);
+        if let Ok(data_bytes) = self.nvme_send_query_command(
+            StorageAdapterProtocolSpecificProperty,
+            &protocol_specific_data,
+            NVME_MAX_LOG_SIZE,
+        ) {
+            // let data = unsafe { *(data_bytes.as_ptr() as *const NVME_HEALTH_INFO_LOG) };
+            Ok(data_bytes)
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+
+    pub fn _nvme_get_feature(&self) -> io::Result<()> {
         const BUFFER_LENGTH: usize = size_of::<STORAGE_PROPERTY_QUERY>() - size_of::<[u8; 1]>()
             + size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>()
             + NVME_MAX_LOG_SIZE;
@@ -314,7 +325,7 @@ impl InboxDriver {
 
         protocol_data.ProtocolType = ProtocolTypeNvme as i32;
         protocol_data.DataType = NVMeDataTypeFeature as u32;
-        protocol_data.ProtocolDataRequestValue = NVME_FEATURE_VOLATILE_WRITE_CACHE;
+        protocol_data.ProtocolDataRequestValue = NVME_FEATURE_VOLATILE_WRITE_CACHE as u32;
         protocol_data.ProtocolDataRequestSubValue = 0;
         protocol_data.ProtocolDataOffset = size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() as u32;
         protocol_data.ProtocolDataLength = NVME_MAX_LOG_SIZE as u32;
@@ -386,7 +397,7 @@ impl InboxDriver {
 
         protocol_data.ProtocolType = ProtocolTypeNvme as i32;
         protocol_data.DataType = NVMeDataTypeFeature as u32;
-        protocol_data.ProtocolDataValue = NVME_FEATURE_HOST_CONTROLLED_THERMAL_MANAGEMENT;
+        protocol_data.ProtocolDataValue = NVME_FEATURE_HOST_CONTROLLED_THERMAL_MANAGEMENT as u32;
         protocol_data.ProtocolDataSubValue = 0;
         protocol_data.ProtocolDataSubValue2 = 0;
         protocol_data.ProtocolDataSubValue3 = 0;
