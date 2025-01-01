@@ -40,13 +40,13 @@ fn main() {
     if let Some(filepath) = args.filepath.as_deref() {
         filename = filepath.to_string();
     }
-    if let Some(driveno) = args.driveno {
-        if let Some(controller) = controller_list.by_num(driveno) {
-            if let Some(disk) = controller.by_num(driveno) {
-                filename = disk.path();
-            }
-        }
-    }
+    // if let Some(driveno) = args.driveno {
+    //     if let Some(controller) = controller_list.by_num(driveno) {
+    //         if let Some(disk) = controller.by_num(driveno) {
+    //             filename = disk.path();
+    //         }
+    //     }
+    // }
     if let Some(busno) = args.busno {
         if let Some(controller) = controller_list.by_bus(busno) {
             filename = controller.path();

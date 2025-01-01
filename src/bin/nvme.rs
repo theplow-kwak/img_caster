@@ -50,8 +50,17 @@ fn main() {
     controller_list.enumerate();
 
     let mut controller = None;
+    let mut disk = None;
     if let Some(driveno) = args.disk {
-        controller = controller_list.by_num(driveno);
+        disk = controller_list.by_num(driveno);
+        if let Some(disk) = disk {
+            let device = InboxDriver::open(&disk.path()).unwrap();
+            let info = device.nvme_identify_controller().unwrap();
+            print_nvme_identify_controller_data(&info);
+            let info = device.nvme_get_log_pages(2).unwrap();
+            println!("{:?}", info);
+            let info = device.nvme_identify_ns_list(0).unwrap();
+        }
     }
     if let Some(busno) = args.bus {
         controller = controller_list.by_bus(busno);
@@ -62,7 +71,7 @@ fn main() {
             let device = InboxDriver::open(&controller.path()).unwrap();
             let info = device.nvme_identify_controller().unwrap();
             print_nvme_identify_controller_data(&info);
-            let info = device.nvme_get_log_pages(7).unwrap();
+            let info = device._nvme_get_log_pages().unwrap();
             println!("{:?}", info);
             let info = device.nvme_identify_ns_list(0).unwrap();
 

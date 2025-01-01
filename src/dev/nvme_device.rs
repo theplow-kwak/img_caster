@@ -294,6 +294,79 @@ impl InboxDriver {
         }
     }
 
+    pub fn _nvme_get_log_pages(&self) -> io::Result<()> {
+        let command_offset = offset_of!(STORAGE_PROPERTY_QUERY, AdditionalParameters);
+        let mut buffer: Vec<u8> =
+            vec![
+                0;
+                command_offset + size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() + NVME_MAX_LOG_SIZE
+            ];
+        let buffer_length = buffer.len() as u32;
+
+        let query = unsafe { &mut *(buffer.as_mut_ptr() as *mut STORAGE_PROPERTY_QUERY) };
+        let protocol_data_descr =
+            unsafe { &mut *(buffer.as_mut_ptr() as *mut STORAGE_PROTOCOL_DATA_DESCRIPTOR) };
+        let protocol_data = unsafe {
+            &mut *(query.AdditionalParameters.as_mut_ptr() as *mut STORAGE_PROTOCOL_SPECIFIC_DATA)
+        };
+
+        query.PropertyId = StorageDeviceProtocolSpecificProperty;
+        query.QueryType = PropertyStandardQuery;
+
+        protocol_data.set(
+            NVMeDataTypeLogPage,
+            NVME_LOG_PAGE_HEALTH_INFO as u32,
+            size_of::<NVME_HEALTH_INFO_LOG>(),
+        );
+
+        let mut returned_length = 0;
+        let result = unsafe {
+            DeviceIoControl(
+                self.get_handle(),
+                IOCTL_STORAGE_QUERY_PROPERTY,
+                buffer.as_mut_ptr() as *mut c_void,
+                buffer_length,
+                buffer.as_mut_ptr() as *mut c_void,
+                buffer_length,
+                &mut returned_length,
+                null_mut(),
+            )
+        };
+
+        if result == 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        if protocol_data_descr.Version != size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32
+            || protocol_data_descr.Size != size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "Data descriptor header not valid",
+            ));
+        }
+
+        let protocol_data = &protocol_data_descr.ProtocolSpecificData;
+
+        if !protocol_data.is_valid(size_of::<NVME_HEALTH_INFO_LOG>()) {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "ProtocolData Offset/Length not valid",
+            ));
+        }
+
+        let smart_info = unsafe {
+            &*(protocol_data.get_data().as_ptr() as *const NVME_HEALTH_INFO_LOG)
+        };
+
+        println!(
+            "SMART/Health Information Log Data - Temperature: {}.",
+            (smart_info.Temperature as u32) - 273
+        );
+        println!("***SMART/Health Information Log succeeded***");
+        Ok(())
+    }
+
     pub fn nvme_get_feature(&self, fid: u32) -> io::Result<&[u8]> {
         let protocol_specific_data =
             STORAGE_PROTOCOL_SPECIFIC_DATA::new(NVMeDataTypeFeature, fid, NVME_MAX_LOG_SIZE);

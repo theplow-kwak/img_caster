@@ -585,11 +585,11 @@ impl NvmeControllerList {
         self
     }
 
-    pub fn by_num(&self, driveno: i32) -> Option<&NvmeController> {
+    pub fn by_num(&self, driveno: i32) -> Option<&PhysicalDisk> {
         for controller in &self.controllers {
             for disk in &controller.disks {
                 if disk.disk_number == driveno {
-                    return Some(controller);
+                    return Some(disk);
                 }
             }
         }
