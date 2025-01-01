@@ -60,9 +60,11 @@ fn main() {
     match controller {
         Some(controller) => {
             let device = InboxDriver::open(&controller.path()).unwrap();
-            let info = device.nvme_identify_ns_list(0).unwrap();
-            let info = device.nvme_send_query_command().unwrap();
+            let info = device.nvme_identify_controller().unwrap();
             print_nvme_identify_controller_data(&info);
+            let info = device.nvme_get_log_pages().unwrap();
+            println!("{:?}", info);
+            let info = device.nvme_identify_ns_list(0).unwrap();
 
             match &args.command {
                 Some(Commands::List {}) => {

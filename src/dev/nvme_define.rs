@@ -4,8 +4,6 @@
 
 use bitfield_struct::bitfield;
 
-pub const NVME_IDENTIFY_CNS_CONTROLLER: u32 = 1;
-pub const NVME_LOG_PAGE_HEALTH_INFO: u32 = 2;
 pub const NVME_IDENTIFY_SIZE: usize = 4096;
 pub const NVME_FEATURE_HOST_CONTROLLED_THERMAL_MANAGEMENT: u32 = 0x10;
 pub const NVME_FEATURE_TEMPERATURE_THRESHOLD: u32 = 0x11;
@@ -2635,7 +2633,7 @@ pub struct NVME_HEALTH_INFO_LOG_CRITICAL_WARNING {
     pub Reserved: u8, // Reserved
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct NVME_HEALTH_INFO_LOG {
     pub CriticalWarning: NVME_HEALTH_INFO_LOG_CRITICAL_WARNING, // Critical Warning
     pub Temperature: u16,                                       // Temperature
