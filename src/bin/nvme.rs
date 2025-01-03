@@ -1,7 +1,9 @@
 use clap::{Parser, Subcommand};
-use img_caster::dev::dev_utils::NvmeControllerList;
-use img_caster::dev::nvme_commands::print_nvme_identify_controller_data;
-use img_caster::dev::nvme_device::InboxDriver;
+use img_caster::dev::dev_utils::{NvmeController, NvmeControllerList, PhysicalDisk};
+use img_caster::dev::nvme_commands::{
+    print_nvme_identify_controller_data, print_nvme_identify_namespace_data,
+};
+use img_caster::dev::nvme_define::{NVME_CDW10_IDENTIFY, NVME_IDENTIFY_CNS_CODES};
 
 #[derive(Parser, Default)]
 #[command(author, version, about)]
@@ -15,9 +17,6 @@ struct Args {
     /// pci bus number. ex) 3 -> "3:0.0"
     #[arg(short, long)]
     bus: Option<i32>,
-    /// Namespace ID
-    #[arg(short, long)]
-    nsid: Option<i32>,
 }
 
 #[derive(Subcommand)]
@@ -25,7 +24,7 @@ enum Commands {
     /// Controller List
     List {},
     /// Namespace List
-    Listns {
+    ListNs {
         #[arg(short, long)]
         all: bool,
     },
@@ -41,45 +40,100 @@ enum Commands {
     Attach {},
     /// Detaches a namespace from requested controller(s)
     Detach {},
+    /// Identify Controller
+    IdCtrl {},
+    /// Identify Namespace
+    IdNs {
+        /// nsid
+        #[clap(short, long, default_value = "1")]
+        nsid: u32,
+    },
+    /// Get log page
+    GetLog {
+        /// log id
+        #[clap(short, long)]
+        lid: Option<u32>,
+    },
 }
 
-fn main() {
-    let args = Args::parse();
+struct CliManager<'a> {
+    args: Args,
+    disk: Option<PhysicalDisk>,
+    ctrl: Option<NvmeController>,
+    nvme_list: &'a mut NvmeControllerList, // Add this line to store the controller list
+}
 
-    let mut controller_list = NvmeControllerList::new();
-    controller_list.enumerate();
-
-    let mut controller = None;
-    let mut disk = None;
-    if let Some(driveno) = args.disk {
-        disk = controller_list.by_num(driveno);
-        if let Some(disk) = disk {
-            let device = InboxDriver::open(&disk.path()).unwrap();
-            let info = device.nvme_identify_controller().unwrap();
-            print_nvme_identify_controller_data(&info);
-            let info = device.nvme_get_log_pages(2).unwrap();
-            println!("{:?}", info);
-            let info = device.nvme_identify_ns_list(0).unwrap();
+impl<'a> CliManager<'a> {
+    fn new(nvme_list: &'a mut NvmeControllerList) -> Self {
+        let args = Args::parse();
+        Self {
+            args,
+            disk: None,
+            ctrl: None,
+            nvme_list,
         }
     }
-    if let Some(busno) = args.bus {
-        controller = controller_list.by_bus(busno);
+    fn open_device(&mut self) -> &mut Self {
+        if let Some(driveno) = self.args.disk {
+            if let Some(disk) = self.nvme_list.by_num(driveno) {
+                disk.open();
+                self.disk = Some(disk.clone());
+            }
+        }
+        if let Some(busno) = self.args.bus {
+            if let Some(ctrl) = self.nvme_list.by_bus(busno) {
+                ctrl.open();
+                self.ctrl = Some(ctrl.clone());
+            }
+        }
+        self
     }
 
-    match controller {
-        Some(controller) => {
-            let device = InboxDriver::open(&controller.path()).unwrap();
-            let info = device.nvme_identify_controller().unwrap();
-            print_nvme_identify_controller_data(&info);
-            let info = device._nvme_get_log_pages().unwrap();
-            println!("{:?}", info);
-            let info = device.nvme_identify_ns_list(0).unwrap();
+    fn run(&self) {
+        self.disk_manager();
+        self.ctrl_manager();
+        self.cli_common();
+    }
 
-            match &args.command {
-                Some(Commands::List {}) => {
-                    println!("{}", controller);
+    fn disk_manager(&self) {
+        if let Some(disk) = &self.disk {
+            let device = disk.get_driver();
+            match &self.args.command {
+                Some(Commands::IdCtrl {}) => {
+                    let info = device.nvme_identify_controller().unwrap();
+                    print_nvme_identify_controller_data(&info);
                 }
-                Some(Commands::Listns { all }) => {}
+                Some(Commands::IdNs { nsid }) => {
+                    let info = device.nvme_identify_namespace(*nsid).unwrap();
+                    print_nvme_identify_namespace_data(&info);
+                }
+                Some(Commands::ListNs { all }) => {
+                    let mut cdw10 = NVME_CDW10_IDENTIFY::default();
+                    let cns = if *all {
+                        NVME_IDENTIFY_CNS_CODES::NVME_IDENTIFY_CNS_ALLOCATED_NAMESPACE_LIST as u8
+                    } else {
+                        NVME_IDENTIFY_CNS_CODES::NVME_IDENTIFY_CNS_ACTIVE_NAMESPACES as u8
+                    };
+                    cdw10.set_CNS(cns);
+                    let info = device.nvme_identify_query(cdw10.into(), 0).unwrap();
+                    println!("{:?}", &info[..20 as usize]);
+                }
+                Some(Commands::GetLog { lid }) => {
+                    let info = device.nvme_logpage_query(lid.unwrap_or(2), 0).unwrap();
+                    println!("{:?}", info);
+                }
+                _ => {}
+            }
+        };
+    }
+
+    fn ctrl_manager(&self) {
+        if let Some(controller) = &self.ctrl {
+            let device = controller.get_driver();
+            match &self.args.command {
+                Some(Commands::ListNs { all }) => {
+                    device.nvme_identify_ns_list(0, *all).unwrap();
+                }
                 Some(Commands::Create { size }) => {
                     controller.rescan();
                 }
@@ -92,11 +146,30 @@ fn main() {
                 Some(Commands::Detach {}) => {
                     controller.disable();
                 }
-                None => {}
+                _ => {}
             }
         }
-        None => {
-            println!("{}", controller_list);
+    }
+
+    fn cli_common(&self) {
+        match &self.args.command {
+            Some(Commands::List {}) => {
+                if let Some(ctrl) = &self.ctrl {
+                    println!("NVME: {}", ctrl);
+                } else {
+                    println!("{}", self.nvme_list);
+                }
+            }
+            _ => {}
         }
-    };
+    }
+}
+
+fn main() {
+    let mut controller_list = NvmeControllerList::new();
+    controller_list.enumerate();
+
+    let mut cli = CliManager::new(&mut controller_list);
+    cli.open_device();
+    cli.run();
 }

@@ -70,34 +70,25 @@ impl StorageProtocolCommand for STORAGE_PROTOCOL_COMMAND {
 }
 
 trait StorageProtocolSpecificData {
-    fn new(data_type: i32, request_value: u32, length: usize) -> Self;
-    fn set(&mut self, data_type: i32, request_value: u32, length: usize) -> &mut Self;
+    fn new(data_type: i32, data_value: u32, sub_value: u32, length: usize) -> Self;
     fn is_valid(&self, length: usize) -> bool;
     fn get_data(&self) -> &[u8];
 }
 
 impl StorageProtocolSpecificData for STORAGE_PROTOCOL_SPECIFIC_DATA {
-    fn new(data_type: i32, request_value: u32, length: usize) -> Self {
+    fn new(data_type: i32, data_value: u32, sub_value: u32, length: usize) -> Self {
         STORAGE_PROTOCOL_SPECIFIC_DATA {
             ProtocolType: ProtocolTypeNvme as i32,
             ProtocolDataOffset: size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() as u32,
             DataType: data_type as u32,
-            ProtocolDataRequestValue: request_value,
-            ProtocolDataRequestSubValue: 0,
+            ProtocolDataRequestValue: data_value,
+            ProtocolDataRequestSubValue: sub_value,
             ProtocolDataRequestSubValue2: 0,
             ProtocolDataRequestSubValue3: 0,
             ProtocolDataRequestSubValue4: 0,
             FixedProtocolReturnData: 0,
             ProtocolDataLength: length as u32,
         }
-    }
-    fn set(&mut self, data_type: i32, request_value: u32, length: usize) -> &mut Self {
-        self.ProtocolType = ProtocolTypeNvme as i32;
-        self.ProtocolDataOffset = size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() as u32;
-        self.DataType = data_type as u32;
-        self.ProtocolDataRequestValue = request_value;
-        self.ProtocolDataLength = length as u32;
-        self
     }
     fn is_valid(&self, length: usize) -> bool {
         self.ProtocolDataOffset >= size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() as u32
@@ -113,8 +104,40 @@ impl StorageProtocolSpecificData for STORAGE_PROTOCOL_SPECIFIC_DATA {
     }
 }
 
+impl StorageProtocolSpecificData for STORAGE_PROTOCOL_SPECIFIC_DATA_EXT {
+    fn new(data_type: i32, data_value: u32, sub_value: u32, length: usize) -> Self {
+        STORAGE_PROTOCOL_SPECIFIC_DATA_EXT {
+            ProtocolType: ProtocolTypeNvme as i32,
+            ProtocolDataOffset: size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA_EXT>() as u32,
+            DataType: data_type as u32,
+            ProtocolDataValue: data_value,
+            ProtocolDataSubValue: sub_value,
+            ProtocolDataSubValue2: 0,
+            ProtocolDataSubValue3: 0,
+            ProtocolDataSubValue4: 0,
+            ProtocolDataSubValue5: 0,
+            FixedProtocolReturnData: 0,
+            ProtocolDataLength: length as u32,
+            Reserved: [0; 5],
+        }
+    }
+    fn is_valid(&self, length: usize) -> bool {
+        self.ProtocolDataOffset >= size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA_EXT>() as u32
+            && self.ProtocolDataLength >= length as u32
+    }
+    fn get_data(&self) -> &[u8] {
+        unsafe {
+            std::slice::from_raw_parts(
+                (self as *const _ as *const u8).add(self.ProtocolDataOffset as usize),
+                self.ProtocolDataLength as usize,
+            )
+        }
+    }
+}
+
 // To use FIELD_OFFSET macro equivalent in Rust:
 // let offset = field_offset::<SomeType, SomeFieldType>(0 as *const SomeType, |s| &s.some_field);
+#[derive(Debug, Clone)]
 pub struct InboxDriver {
     handle: HANDLE,
 }
@@ -180,8 +203,8 @@ impl InboxDriver {
         &self,
         property_id: i32,
         protocol_data: &STORAGE_PROTOCOL_SPECIFIC_DATA,
-        data_length: usize,
     ) -> io::Result<&[u8]> {
+        let data_length = protocol_data.ProtocolDataLength as usize;
         let data_offset = offset_of!(STORAGE_PROPERTY_QUERY, AdditionalParameters);
         let query_size = data_offset + size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() + data_length;
         let mut buffer = vec![0u8; query_size];
@@ -195,7 +218,7 @@ impl InboxDriver {
             std::ptr::copy_nonoverlapping(protocol_data, protocol_specific_data_ptr, 1);
         }
         let mut returned_length = 0;
-        let result = unsafe {
+        if unsafe {
             DeviceIoControl(
                 self.get_handle(),
                 IOCTL_STORAGE_QUERY_PROPERTY,
@@ -206,9 +229,8 @@ impl InboxDriver {
                 &mut returned_length,
                 null_mut(),
             )
-        };
-
-        if result == 0 {
+        } == 0
+        {
             return Err(io::Error::last_os_error());
         }
 
@@ -224,121 +246,95 @@ impl InboxDriver {
         }
 
         let protocol_specific_data = &data_descriptor.ProtocolSpecificData;
-        if !protocol_specific_data.is_valid(NVME_IDENTIFY_SIZE) {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "ProtocolData Offset/Length not valid",
-            ));
-        }
-
         Ok(protocol_specific_data.get_data())
     }
 
-    pub fn nvme_identify_controller(&self) -> io::Result<NVME_IDENTIFY_CONTROLLER_DATA> {
+    pub fn nvme_identify_query(&self, cns: u32, nsid: u32) -> io::Result<&[u8]> {
         let protocol_specific_data = STORAGE_PROTOCOL_SPECIFIC_DATA::new(
             NVMeDataTypeIdentify,
-            NVME_IDENTIFY_CNS_CONTROLLER as u32,
+            cns,
+            nsid,
             NVME_IDENTIFY_SIZE,
         );
-
-        if let Ok(data_bytes) = self.nvme_send_query_command(
+        let result = self.nvme_send_query_command(
             StorageAdapterProtocolSpecificProperty,
             &protocol_specific_data,
-            NVME_IDENTIFY_SIZE,
-        ) {
-            let identify_controller_data =
-                unsafe { *(data_bytes.as_ptr() as *const NVME_IDENTIFY_CONTROLLER_DATA) };
-            if identify_controller_data.VID == 0 || identify_controller_data.NN == 0 {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "Identify Controller Data not valid",
-                ));
-            }
-            Ok(identify_controller_data)
-        } else {
-            Err(io::Error::last_os_error())
+        );
+
+        match result {
+            Ok(data_bytes) => Ok(data_bytes),
+            Err(e) => Err(e),
         }
     }
 
-    pub fn nvme_identify_namespace(&self) -> io::Result<NVME_IDENTIFY_NAMESPACE_DATA> {
-        let protocol_specific_data = STORAGE_PROTOCOL_SPECIFIC_DATA::new(
-            NVMeDataTypeIdentify,
-            NVME_IDENTIFY_CNS_SPECIFIC_NAMESPACE as u32,
-            NVME_IDENTIFY_SIZE,
-        );
-
-        if let Ok(data_bytes) = self.nvme_send_query_command(
-            StorageAdapterProtocolSpecificProperty,
-            &protocol_specific_data,
-            NVME_IDENTIFY_SIZE,
-        ) {
-            let data = unsafe { *(data_bytes.as_ptr() as *const NVME_IDENTIFY_NAMESPACE_DATA) };
-            Ok(data)
-        } else {
-            Err(io::Error::last_os_error())
-        }
-    }
-
-    pub fn nvme_get_log_pages(&self, log_id: u32) -> io::Result<&[u8]> {
+    pub fn nvme_logpage_query(&self, lid: u32, cdw10: u32) -> io::Result<&[u8]> {
         let protocol_specific_data =
-            STORAGE_PROTOCOL_SPECIFIC_DATA::new(NVMeDataTypeLogPage, log_id, NVME_MAX_LOG_SIZE);
-        if let Ok(data_bytes) = self.nvme_send_query_command(
-            StorageAdapterProtocolSpecificProperty,
+            STORAGE_PROTOCOL_SPECIFIC_DATA::new(NVMeDataTypeLogPage, lid, cdw10, NVME_MAX_LOG_SIZE);
+        let result = self.nvme_send_query_command(
+            StorageDeviceProtocolSpecificProperty,
             &protocol_specific_data,
-            NVME_MAX_LOG_SIZE,
-        ) {
-            // let data = unsafe { *(data_bytes.as_ptr() as *const NVME_HEALTH_INFO_LOG) };
-            Ok(data_bytes)
-        } else {
-            Err(io::Error::last_os_error())
+        );
+
+        match result {
+            Ok(data_bytes) => Ok(data_bytes),
+            Err(err) => Err(err),
         }
     }
 
-    pub fn _nvme_get_log_pages(&self) -> io::Result<()> {
-        let command_offset = offset_of!(STORAGE_PROPERTY_QUERY, AdditionalParameters);
-        let mut buffer: Vec<u8> =
-            vec![
-                0;
-                command_offset + size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() + NVME_MAX_LOG_SIZE
-            ];
-        let buffer_length = buffer.len() as u32;
-
-        let query = unsafe { &mut *(buffer.as_mut_ptr() as *mut STORAGE_PROPERTY_QUERY) };
-        let protocol_data_descr =
-            unsafe { &mut *(buffer.as_mut_ptr() as *mut STORAGE_PROTOCOL_DATA_DESCRIPTOR) };
-        let protocol_data = unsafe {
-            &mut *(query.AdditionalParameters.as_mut_ptr() as *mut STORAGE_PROTOCOL_SPECIFIC_DATA)
-        };
-
-        query.PropertyId = StorageDeviceProtocolSpecificProperty;
-        query.QueryType = PropertyStandardQuery;
-
-        protocol_data.set(
-            NVMeDataTypeLogPage,
-            NVME_LOG_PAGE_HEALTH_INFO as u32,
-            size_of::<NVME_HEALTH_INFO_LOG>(),
+    pub fn nvme_getfeature_query(&self, fid: u32, cdw10: u32) -> io::Result<&[u8]> {
+        let protocol_specific_data =
+            STORAGE_PROTOCOL_SPECIFIC_DATA::new(NVMeDataTypeFeature, fid, cdw10, NVME_MAX_LOG_SIZE);
+        let result = self.nvme_send_query_command(
+            StorageDeviceProtocolSpecificProperty,
+            &protocol_specific_data,
         );
 
+        match result {
+            Ok(data_bytes) => Ok(data_bytes),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub fn nvme_send_set_command(
+        &self,
+        property_id: i32,
+        protocol_data: &STORAGE_PROTOCOL_SPECIFIC_DATA_EXT,
+    ) -> io::Result<&[u8]> {
+        let data_length = protocol_data.ProtocolDataLength as usize;
+        let data_offset = offset_of!(STORAGE_PROPERTY_SET, AdditionalParameters);
+        let set_size = data_offset + size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA_EXT>() + data_length;
+        let mut buffer = vec![0u8; set_size];
+        let propert_query = unsafe { &mut *(buffer.as_mut_ptr() as *mut STORAGE_PROPERTY_SET) };
+        propert_query.PropertyId = property_id;
+        propert_query.SetType = PropertyStandardSet;
+
+        let protocol_specific_data_ptr = unsafe {
+            buffer.as_mut_ptr().add(data_offset) as *mut STORAGE_PROTOCOL_SPECIFIC_DATA_EXT
+        };
+        unsafe {
+            std::ptr::copy_nonoverlapping(protocol_data, protocol_specific_data_ptr, 1);
+        }
         let mut returned_length = 0;
-        let result = unsafe {
+        if unsafe {
             DeviceIoControl(
                 self.get_handle(),
-                IOCTL_STORAGE_QUERY_PROPERTY,
+                IOCTL_STORAGE_SET_PROPERTY,
                 buffer.as_mut_ptr() as *mut c_void,
-                buffer_length,
+                buffer.len() as u32,
                 buffer.as_mut_ptr() as *mut c_void,
-                buffer_length,
+                buffer.len() as u32,
                 &mut returned_length,
                 null_mut(),
             )
-        };
-
-        if result == 0 {
+        } == 0
+        {
             return Err(io::Error::last_os_error());
         }
 
-        if protocol_data_descr.Version != size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32
-            || protocol_data_descr.Size != size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32
+        let data_descriptor =
+            unsafe { &*(buffer.as_ptr() as *const STORAGE_PROTOCOL_DATA_DESCRIPTOR) };
+        if data_descriptor.Version != size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32
+            || data_descriptor.Size != size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32
         {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
@@ -346,111 +342,8 @@ impl InboxDriver {
             ));
         }
 
-        let protocol_data = &protocol_data_descr.ProtocolSpecificData;
-
-        if !protocol_data.is_valid(size_of::<NVME_HEALTH_INFO_LOG>()) {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "ProtocolData Offset/Length not valid",
-            ));
-        }
-
-        let smart_info = unsafe {
-            &*(protocol_data.get_data().as_ptr() as *const NVME_HEALTH_INFO_LOG)
-        };
-
-        println!(
-            "SMART/Health Information Log Data - Temperature: {}.",
-            (smart_info.Temperature as u32) - 273
-        );
-        println!("***SMART/Health Information Log succeeded***");
-        Ok(())
-    }
-
-    pub fn nvme_get_feature(&self, fid: u32) -> io::Result<&[u8]> {
-        let protocol_specific_data =
-            STORAGE_PROTOCOL_SPECIFIC_DATA::new(NVMeDataTypeFeature, fid, NVME_MAX_LOG_SIZE);
-        if let Ok(data_bytes) = self.nvme_send_query_command(
-            StorageAdapterProtocolSpecificProperty,
-            &protocol_specific_data,
-            NVME_MAX_LOG_SIZE,
-        ) {
-            // let data = unsafe { *(data_bytes.as_ptr() as *const NVME_HEALTH_INFO_LOG) };
-            Ok(data_bytes)
-        } else {
-            Err(io::Error::last_os_error())
-        }
-    }
-
-    pub fn _nvme_get_feature(&self) -> io::Result<()> {
-        const BUFFER_LENGTH: usize = size_of::<STORAGE_PROPERTY_QUERY>() - size_of::<[u8; 1]>()
-            + size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>()
-            + NVME_MAX_LOG_SIZE;
-        let mut buffer: Vec<u8> = vec![0; BUFFER_LENGTH];
-
-        let query = unsafe { &mut *(buffer.as_mut_ptr() as *mut STORAGE_PROPERTY_QUERY) };
-        let protocol_data = unsafe {
-            &mut *(query.AdditionalParameters.as_mut_ptr() as *mut STORAGE_PROTOCOL_SPECIFIC_DATA)
-        };
-
-        query.PropertyId = StorageDeviceProtocolSpecificProperty;
-        query.QueryType = PropertyStandardQuery;
-
-        protocol_data.ProtocolType = ProtocolTypeNvme as i32;
-        protocol_data.DataType = NVMeDataTypeFeature as u32;
-        protocol_data.ProtocolDataRequestValue = NVME_FEATURE_VOLATILE_WRITE_CACHE as u32;
-        protocol_data.ProtocolDataRequestSubValue = 0;
-        protocol_data.ProtocolDataOffset = size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() as u32;
-        protocol_data.ProtocolDataLength = NVME_MAX_LOG_SIZE as u32;
-
-        let mut returned_length = 0;
-        let result = unsafe {
-            DeviceIoControl(
-                self.get_handle(),
-                IOCTL_STORAGE_QUERY_PROPERTY,
-                buffer.as_mut_ptr() as *mut c_void,
-                BUFFER_LENGTH as u32,
-                buffer.as_mut_ptr() as *mut c_void,
-                BUFFER_LENGTH as u32,
-                &mut returned_length,
-                null_mut(),
-            )
-        };
-
-        if result == 0 {
-            return Err(io::Error::last_os_error());
-        }
-
-        let protocol_data_descr =
-            unsafe { &mut *(buffer.as_mut_ptr() as *mut STORAGE_PROTOCOL_DATA_DESCRIPTOR) };
-
-        if protocol_data_descr.Version != size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32
-            || protocol_data_descr.Size != size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "Data descriptor header not valid",
-            ));
-        }
-
-        let protocol_data = &protocol_data_descr.ProtocolSpecificData;
-
-        if protocol_data.ProtocolDataOffset < size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() as u32
-            || protocol_data.ProtocolDataLength < NVME_MAX_LOG_SIZE as u32
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "ProtocolData Offset/Length not valid",
-            ));
-        }
-
-        println!(
-            "Volatile Cache: {:x}",
-            protocol_data.FixedProtocolReturnData
-        );
-
-        println!("***Get Feature - Volatile Cache succeeded***");
-        Ok(())
+        let protocol_specific_data = &data_descriptor.ProtocolSpecificData;
+        Ok(protocol_specific_data.get_data())
     }
 
     pub fn nvme_set_features(&self) -> io::Result<()> {

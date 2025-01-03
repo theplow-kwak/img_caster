@@ -1,4 +1,5 @@
 use crate::dev::nvme_define::*;
+use crate::dev::nvme_define::{NVME_FEATURES::*, NVME_IDENTIFY_CNS_CODES::*, NVME_LOG_PAGES::*, *};
 use crate::dev::nvme_device::*;
 use std::mem::offset_of;
 use std::{ffi::c_void, io, mem::size_of, ptr::null_mut};
@@ -151,24 +152,52 @@ impl InboxDriver {
         )
     }
 
-    pub fn nvme_identify_ns_list(&self, nsid: u32) -> io::Result<NVME_COMMAND_STATUS> {
+    pub fn nvme_identify_ns_list(&self, nsid: u32, all: bool) -> io::Result<NVME_COMMAND_STATUS> {
         let mut buffer = vec![0u8; 4096];
         let mut nc = NVME_COMMAND::default();
         let mut dw0: u32 = 0;
+        let cns = if all {
+            NVME_IDENTIFY_CNS_CODES::NVME_IDENTIFY_CNS_ALLOCATED_NAMESPACE_LIST as u8
+        } else {
+            NVME_IDENTIFY_CNS_CODES::NVME_IDENTIFY_CNS_ACTIVE_NAMESPACES as u8
+        };
+
         nc.opcode(NVME_ADMIN_COMMANDS::NVME_ADMIN_COMMAND_IDENTIFY as u32)
             .nsid(nsid)
-            .identify(NVME_IDENTIFY_CNS_CODES::NVME_IDENTIFY_CNS_ACTIVE_NAMESPACES as u8);
+            .identify(cns);
         let ncs =
-            self.nvme_send_vsc_admin_passthrough_command(&nc, Some(&mut buffer), Some(&mut dw0));
-        let mut ns_list = Vec::with_capacity(buffer.len() / 4);
-        for chunk in buffer.chunks_exact(4) {
-            let value = u32::from_le_bytes(chunk.try_into().expect("Chunk size mismatch"));
-            if value != 0 {
-                ns_list.push(value);
-                println!("{:?}", value);
-            }
+            self.nvme_send_vsc_admin_passthrough_command(&nc, Some(&mut buffer), Some(&mut dw0))?;
+
+        let ns_list: Vec<u32> = buffer
+            .chunks_exact(4)
+            .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("Chunk size mismatch")))
+            .filter(|&value| value != 0)
+            .collect();
+
+        for ns in &ns_list {
+            println!("{:?}", ns);
         }
-        ncs
+        Ok(ncs)
+    }
+
+    pub fn nvme_identify_controller(&self) -> io::Result<NVME_IDENTIFY_CONTROLLER_DATA> {
+        let result = self.nvme_identify_query(NVME_IDENTIFY_CNS_CONTROLLER as u32, 0);
+        match result {
+            Ok(data_bytes) => {
+                Ok(unsafe { *(data_bytes.as_ptr() as *const NVME_IDENTIFY_CONTROLLER_DATA) })
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    pub fn nvme_identify_namespace(&self, nsid: u32) -> io::Result<NVME_IDENTIFY_NAMESPACE_DATA> {
+        let result = self.nvme_identify_query(NVME_IDENTIFY_CNS_SPECIFIC_NAMESPACE as u32, nsid);
+        match result {
+            Ok(data_bytes) => {
+                Ok(unsafe { *(data_bytes.as_ptr() as *const NVME_IDENTIFY_NAMESPACE_DATA) })
+            }
+            Err(err) => Err(err),
+        }
     }
 }
 
@@ -279,4 +308,10 @@ pub fn print_nvme_identify_controller_data(data: &NVME_IDENTIFY_CONTROLLER_DATA)
     );
     // Power State Descriptors are not printed here for brevity.
     // Vendor Specific fields are also not printed here for brevity.
+}
+
+pub fn print_nvme_identify_namespace_data(info: &NVME_IDENTIFY_NAMESPACE_DATA) {
+    println!("Namespace Size: {}", info.NSZE);
+    println!("Namespace Capacity: {}", info.NCAP);
+    // Add more fields as necessary
 }

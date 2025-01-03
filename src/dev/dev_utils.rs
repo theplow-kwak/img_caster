@@ -1,3 +1,4 @@
+use super::nvme_device::InboxDriver;
 use crate::dev::disk::{get_physical_drv_number_from_logical_drv, ioctl, open};
 use once_cell::sync::Lazy;
 use sscanf;
@@ -18,7 +19,7 @@ use windows_sys::{
     },
 };
 
-#[derive(Default, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Default, PartialEq, Eq, PartialOrd, Ord, Clone)]
 struct PciBdf {
     segment: i32,
     bus: i32,
@@ -68,7 +69,7 @@ impl fmt::Display for PciBdf {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 struct DevInstance {
     devinst: u32,
     status: u32,
@@ -210,7 +211,7 @@ impl fmt::Display for DevInstance {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct LogicalDrive;
 static SHARED_DATA: Mutex<Vec<(i32, String)>> = Mutex::new(Vec::new());
 
@@ -247,7 +248,7 @@ impl LogicalDrive {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PhysicalDisk {
     devinst: DevInstance,
     interface_path: String,
@@ -255,6 +256,8 @@ pub struct PhysicalDisk {
     disk_number: i32,
     nsid: i32,
     drives: Vec<String>,
+    pub dev_type: u8,
+    driver: Option<InboxDriver>,
 }
 
 impl PhysicalDisk {
@@ -266,6 +269,8 @@ impl PhysicalDisk {
             disk_number: -1,
             nsid: -1,
             drives: vec![],
+            dev_type: 2,
+            driver: None,
         })
     }
 
@@ -362,6 +367,21 @@ impl PhysicalDisk {
         self.drives = LogicalDrive::get_drives(self.disk_number);
         self
     }
+
+    pub fn open(&mut self) -> &mut Self {
+        self.driver = match InboxDriver::open(&self.path()) {
+            Ok(driver) => Some(driver),
+            Err(e) => {
+                eprintln!("Failed to open driver: {}", e);
+                None
+            }
+        };
+        self
+    }
+
+    pub fn get_driver(&self) -> &InboxDriver {
+        self.driver.as_ref().unwrap()
+    }
 }
 
 impl fmt::Display for PhysicalDisk {
@@ -374,12 +394,14 @@ impl fmt::Display for PhysicalDisk {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NvmeController {
     devinst: DevInstance,
     interface_path: String,
     bdf: PciBdf,
     disks: Vec<PhysicalDisk>,
+    pub dev_type: u8,
+    driver: Option<InboxDriver>,
 }
 
 impl NvmeController {
@@ -392,6 +414,8 @@ impl NvmeController {
                         interface_path,
                         bdf: Default::default(),
                         disks: vec![],
+                        dev_type: 1,
+                        driver: None,
                     })
                 }
                 _ => return None,
@@ -420,13 +444,10 @@ impl NvmeController {
         self
     }
 
-    pub fn by_num(&self, driveno: i32) -> Option<&PhysicalDisk> {
-        for disk in &self.disks {
-            if disk.disk_number == driveno {
-                return Some(disk);
-            }
-        }
-        None
+    pub fn by_num(&mut self, driveno: i32) -> Option<&mut PhysicalDisk> {
+        self.disks
+            .iter_mut()
+            .find(|disk| disk.disk_number == driveno)
     }
 
     pub fn path(&self) -> String {
@@ -486,6 +507,21 @@ impl NvmeController {
 
     pub fn refresh(&self) -> CONFIGRET {
         self.devinst.refresh()
+    }
+
+    pub fn open(&mut self) -> &mut Self {
+        self.driver = match InboxDriver::open(&self.path()) {
+            Ok(driver) => Some(driver),
+            Err(e) => {
+                eprintln!("Failed to open driver: {}", e);
+                None
+            }
+        };
+        self
+    }
+
+    pub fn get_driver(&self) -> &InboxDriver {
+        self.driver.as_ref().unwrap()
     }
 }
 
@@ -585,24 +621,16 @@ impl NvmeControllerList {
         self
     }
 
-    pub fn by_num(&self, driveno: i32) -> Option<&PhysicalDisk> {
-        for controller in &self.controllers {
-            for disk in &controller.disks {
-                if disk.disk_number == driveno {
-                    return Some(disk);
-                }
-            }
-        }
-        None
+    pub fn by_num(&mut self, driveno: i32) -> Option<&mut PhysicalDisk> {
+        self.controllers
+            .iter_mut()
+            .find_map(|controller| controller.by_num(driveno))
     }
 
-    pub fn by_bus(&self, bus: i32) -> Option<&NvmeController> {
-        for controller in &self.controllers {
-            if controller.bdf == PciBdf::new(0, bus, 0, 0) {
-                return Some(controller);
-            }
-        }
-        None
+    pub fn by_bus(&mut self, bus: i32) -> Option<&mut NvmeController> {
+        self.controllers
+            .iter_mut()
+            .find(|controller| controller.bdf == PciBdf::new(0, bus, 0, 0))
     }
 }
 
